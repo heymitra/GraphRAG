@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GraphRAG Extraction Results</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+    <script>
+        async function loadData() {
+            const resp = await fetch('/api/data');
+            const data = await resp.json();
+            renderEntities(data.entities);
+            renderClaims(data.claims);
+            renderCommunities(data.communities);
+        }
+        function renderEntities(entities) {
+            const container = document.getElementById('entities');
+            entities.forEach(e => {
+                const div = document.createElement('div');
+                div.className = 'list-item';
+                div.textContent = `${e.name} (type: ${e.type})`;
+                container.appendChild(div);
+            });
+        }
+        function renderClaims(claims) {
+            const container = document.getElementById('claims');
+            claims.forEach(c => {
+                const div = document.createElement('div');
+                div.className = 'list-item';
+                div.textContent = `${c.type}: ${c.description}`;
+                container.appendChild(div);
+            });
+        }
+        function renderCommunities(communities) {
+            const container = document.getElementById('communities');
+            communities.forEach(comm => {
+                const commDiv = document.createElement('div');
+                commDiv.className = 'community';
+                const title = document.createElement('h2');
+                title.textContent = comm.title || `Community ${comm.id}`;
+                commDiv.appendChild(title);
+                const list = document.createElement('div');
+                (comm.entities || []).forEach(ent => {
+                    const entDiv = document.createElement('div');
+                    entDiv.className = 'list-item';
+                    entDiv.textContent = ent.name;
+                    list.appendChild(entDiv);
+                });
+                commDiv.appendChild(list);
+                container.appendChild(commDiv);
+            });
+        }
+        document.addEventListener('DOMContentLoaded', loadData);
+    </script>
+</head>
+<body>
+    <main class="container">
+        <h1>Extraction Results</h1>
+        <section>
+            <h2>Entities</h2>
+            <div id="entities"></div>
+        </section>
+        <section>
+            <h2>Claims</h2>
+            <div id="claims"></div>
+        </section>
+        <section>
+            <h2>Communities</h2>
+            <div id="communities"></div>
+        </section>
+    </main>
+</body>
+</html>

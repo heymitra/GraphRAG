@@ -19,10 +19,7 @@ Extract knowledge graphs from documents using [Microsoft GraphRAG](https://githu
 ├── import_neo4j.py        # Neo4j import script
 ├── extract_pdf.py         # PDF → text extraction utility
 ├── update_graph.sh        # One-command rebuild: clear cache → index → import
-├── inspect.ipynb          # Jupyter notebook for graph analysis
-├── analyze_claims.py      # Inspect covariates/claims parquet
-├── debug_entities.py      # Compare claim subjects to entity names
-└── check_claims.py        # Verify claim→entity edges in Neo4j
+└── inspect.ipynb          # Jupyter notebook for graph analysis
 ```
 
 ## Setup
@@ -34,7 +31,7 @@ Extract knowledge graphs from documents using [Microsoft GraphRAG](https://githu
 ```bash
 python3 -m venv graphrag-env
 source graphrag-env/bin/activate        # Windows: graphrag-env\Scripts\activate
-pip install graphrag neo4j pandas jupyter matplotlib networkx PyPDF2
+pip install graphrag neo4j pandas jupyter matplotlib networkx PyPDF2 flask werkzeug
 ```
 
 ### 2. Configure API Key
@@ -60,7 +57,26 @@ docker run -d \
 
 ## Usage
 
-### Option A — One command (recommended)
+### Using the Web Explorer UI (Recommended)
+
+You can use the built-in professional web frontend to upload PDFs, watch the live pipeline logs, and explore extracted knowledge (Entities, Claims, Relationships, and Communities) interactively.
+
+```bash
+# 1. Ensure Neo4j is running
+docker start graphrag-neo4j
+
+# 2. Start the web frontend
+source graphrag-env/bin/activate
+python3 frontend/app.py
+```
+
+Open **[http://localhost:8501](http://localhost:8501)** in your browser.
+
+---
+
+### Command Line Operations
+
+#### Option A — One command script
 
 ```bash
 ./update_graph.sh
@@ -176,7 +192,7 @@ RETURN e1.name, e2.name, r.description, r.text_unit_ids LIMIT 10
 | Stale extraction results | `rm -rf cache/` before re-indexing |
 | Neo4j connection refused | Check container is running: `docker ps` |
 | Wrong port | Browser → 7475, Bolt → 7688 (matches `import_neo4j.py`) |
-| Claim→Entity edges missing | Entity names in claims must match GraphRAG output exactly; run `debug_entities.py` to compare |
+| Claim→Entity edges missing | Entity names in claims must match GraphRAG output exactly |
 | API rate limits | Reduce `max_gleanings` or `chunk_size` in `settings.yaml` |
 
 ## License

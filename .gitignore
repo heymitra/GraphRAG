@@ -18,8 +18,12 @@ logs/
 *.parquet
 *.csv
 *.txt
-!prompts/*.txt
+*.pdf
+input/
 !input/.gitkeep
+frontend/uploads/
+!frontend/uploads/.gitkeep
+!prompts/*.txt
 !README.txt
 
 # Jupyter notebook checkpoints
