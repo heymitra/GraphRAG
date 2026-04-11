@@ -8,23 +8,58 @@ import subprocess
 import threading
 import shutil
 import time
+import math
+import json as _json
+
+import pandas as pd
 
 # ── Paths (relative to project root, where the app is launched from) ──────────
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 UPLOAD_FOLDER = os.path.join(PROJECT_ROOT, 'frontend', 'uploads')
 INPUT_FOLDER  = os.path.join(PROJECT_ROOT, 'input')
+OUTPUT_FOLDER = os.path.join(PROJECT_ROOT, 'output')
 GRAPHRAG_BIN  = os.path.join(PROJECT_ROOT, 'graphrag-env', 'bin', 'graphrag')
 PYTHON_BIN    = os.path.join(PROJECT_ROOT, 'graphrag-env', 'bin', 'python')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(INPUT_FOLDER,  exist_ok=True)
 
-# ── Neo4j ─────────────────────────────────────────────────────────────────────
+# ── Neo4j (used only for write/admin operations) ──────────────────────────────
 NEO4J_URI      = "bolt://localhost:7688"
 NEO4J_USER     = "neo4j"
 NEO4J_PASSWORD = "graphrag123"
 
 def get_driver():
     return GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+
+# ── Parquet helpers ───────────────────────────────────────────────────────────
+def _parquet(filename):
+    """Read a parquet from output/; return empty DataFrame if missing."""
+    path = os.path.join(OUTPUT_FOLDER, filename)
+    try:
+        return pd.read_parquet(path)
+    except (FileNotFoundError, OSError):
+        return pd.DataFrame()
+
+def _to_list(val):
+    """Normalise numpy arrays / None / strings-that-look-like-lists to Python lists."""
+    if val is None:
+        return []
+    if hasattr(val, 'tolist'):
+        return [v for v in val.tolist() if v is not None]
+    if isinstance(val, list):
+        return [v for v in val if v is not None]
+    if isinstance(val, str) and val.startswith('['):
+        try:
+            return [v for v in _json.loads(val) if v is not None]
+        except Exception:
+            return []
+    return []
+
+def _clean_type(val):
+    """Strip LLM extraction artifacts (e.g. '<|diff_marker|>…') from type strings."""
+    if not val:
+        return ''
+    return str(val).split('<')[0].strip()
 
 # ── Global pipeline state ─────────────────────────────────────────────────────
 pipeline_state = {
@@ -143,64 +178,132 @@ def api_status():
 
 @app.route('/api/data')
 def api_data():
-    try:
-        driver = get_driver()
-    except Exception as e:
-        return jsonify({"error": str(e)}), 503
+    """Return all graph data read directly from parquet pipeline output."""
+    docs_df  = _parquet('documents.parquet')
+    ents_df  = _parquet('entities.parquet')
+    rels_df  = _parquet('relationships.parquet')
+    comms_df = _parquet('communities.parquet')
+    crs_df   = _parquet('community_reports.parquet')
+    tu_df    = _parquet('text_units.parquet')
+    cov_df   = _parquet('covariates.parquet')
 
-    with driver.session() as session:
-        documents = session.run(
-            "MATCH (d:Document) RETURN d.id AS id, d.title AS title"
-        ).data()
+    if docs_df.empty and ents_df.empty:
+        return jsonify({'documents': [], 'entities': [], 'claims': [],
+                        'communities': [], 'relationships': [], 'stats': []})
 
-        entities = session.run(
-            "MATCH (e:Entity) "
-            "OPTIONAL MATCH (e)-[:MENTIONED_IN]->(t:TextUnit)<-[:CONTAINS]-(d:Document) "
-            "WITH e, collect(DISTINCT d.id) AS document_ids "
-            "RETURN e.id AS id, e.name AS name, e.type AS type, "
-            "e.description AS description, e.degree AS degree, document_ids "
-            "ORDER BY e.degree DESC LIMIT 300"
-        ).data()
+    # ── Documents ────────────────────────────────────────────────────────────
+    documents = [
+        {'id': str(r['id']), 'title': r.get('title', '') or ''}
+        for _, r in docs_df.iterrows()
+    ]
 
-        claims = session.run(
-            "MATCH (c:Claim) "
-            "OPTIONAL MATCH (c)-[:ABOUT_SUBJECT]->(subj:Entity) "
-            "OPTIONAL MATCH (c)-[:ABOUT_OBJECT]->(obj:Entity) "
-            "OPTIONAL MATCH (c)-[:EXTRACTED_FROM]->(t:TextUnit)<-[:CONTAINS]-(d:Document) "
-            "RETURN c.id AS id, c.type AS type, c.description AS description, "
-            "c.status AS status, subj.name AS subject, obj.name AS object, "
-            "d.id AS document_id LIMIT 300"
-        ).data()
+    # ── text_unit_id → [document_ids] lookup ─────────────────────────────────
+    tu_to_docs = {}
+    for _, row in tu_df.iterrows():
+        doc_ids = _to_list(row.get('document_ids'))
+        if doc_ids:
+            tu_to_docs[str(row['id'])] = doc_ids
+    tu_to_first_doc = {k: v[0] for k, v in tu_to_docs.items()}
 
-        communities = session.run(
-            "MATCH (comm:Community) "
-            "OPTIONAL MATCH (cr:CommunityReport)-[:DESCRIBES]->(comm) "
-            "RETURN comm.id AS id, comm.title AS title, comm.level AS level, "
-            "comm.size AS size, cr.summary AS summary LIMIT 50"
-        ).data()
+    # ── Entities ─────────────────────────────────────────────────────────────
+    entities = []
+    for _, row in ents_df.iterrows():
+        doc_ids = []
+        for tu_id in _to_list(row.get('text_unit_ids')):
+            for did in tu_to_docs.get(str(tu_id), []):
+                if did not in doc_ids:
+                    doc_ids.append(did)
+        entities.append({
+            'id':          str(row['id']),
+            'name':        row.get('title', '') or '',
+            'type':        (row.get('type', '') or '').lower(),
+            'description': row.get('description', '') or '',
+            'degree':      int(row.get('degree', 0) or 0),
+            'frequency':   int(row.get('frequency', 0) or 0),
+            'document_ids': doc_ids,
+        })
+    entities.sort(key=lambda x: x['degree'], reverse=True)
+    entities = entities[:300]
 
-        comm_entities = session.run(
-            "MATCH (comm:Community)<-[:BELONGS_TO]-(e:Entity) "
-            "RETURN comm.id AS community_id, "
-            "collect({id: e.id, name: e.name, type: e.type}) AS entities"
-        ).data()
+    # ── Claims / Covariates ───────────────────────────────────────────────────
+    claims = []
+    for _, row in cov_df.iterrows():
+        tu_id = str(row.get('text_unit_id', '') or '')
+        raw_start = str(row.get('start_date', '') or '')
+        raw_end   = str(row.get('end_date',   '') or '')
+        claims.append({
+            'id':          str(row['id']),
+            'type':        _clean_type(row.get('type', '') or ''),
+            'description': row.get('description', '') or '',
+            'status':      row.get('status', '') or '',
+            'subject':     row.get('subject_id', '') or '',
+            'object':      row.get('object_id', '') or '',
+            'start_date':  raw_start[:10] if raw_start not in ('', 'nan', 'None') else '',
+            'end_date':    raw_end[:10]   if raw_end   not in ('', 'nan', 'None') else '',
+            'document_id': tu_to_first_doc.get(tu_id),
+        })
+    claims = claims[:300]
 
-        relationships = session.run(
-            "MATCH (a:Entity)-[r:RELATED]->(b:Entity) "
-            "RETURN a.name AS source, b.name AS target, r.description AS description, "
-            "r.weight AS weight ORDER BY r.weight DESC LIMIT 100"
-        ).data()
+    # ── Communities ───────────────────────────────────────────────────────────
+    # community_reports has AI titles + summaries; communities has entity_ids
+    # join on the shared 'community' integer key
+    ent_lookup = {
+        str(r['id']): {'id': str(r['id']),
+                       'name': r.get('title', '') or '',
+                       'type': (r.get('type', '') or '').lower()}
+        for _, r in ents_df.iterrows()
+    }
+    comm_num_to_eids  = {}
+    comm_num_to_title = {}   # structural title from communities.parquet ("Community N")
+    for _, row in comms_df.iterrows():
+        num = row.get('community')
+        if num is not None:
+            n = int(num)
+            comm_num_to_eids[n]  = _to_list(row.get('entity_ids'))
+            comm_num_to_title[n] = row.get('title', '') or f'Community {n}'
 
-        stats = session.run(
-            "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count "
-            "ORDER BY count DESC"
-        ).data()
+    communities = []
+    for _, row in crs_df.iterrows():
+        num      = row.get('community')
+        comm_num = int(num) if num is not None else -1
+        eids     = comm_num_to_eids.get(comm_num, [])
+        base     = comm_num_to_title.get(comm_num, f'Community {comm_num}')
+        raw_findings = row.get('findings')
+        findings_count = len(raw_findings) if isinstance(raw_findings, list) else 0
+        communities.append({
+            'id':             str(row['id']),
+            'community_num':  comm_num,
+            'base_title':     base,
+            'report_title':   row.get('title', '') or '',
+            'level':          int(row.get('level', 0) or 0),
+            'rank':           float(row.get('rank', 0) or 0),
+            'findings_count': findings_count,
+            'summary':        row.get('summary', '') or '',
+            'entities':       [ent_lookup[e] for e in eids if e in ent_lookup],
+        })
+    communities = sorted(communities, key=lambda c: c['rank'], reverse=True)
 
-    driver.close()
+    # ── Relationships ─────────────────────────────────────────────────────────
+    relationships = []
+    for _, row in rels_df.iterrows():
+        relationships.append({
+            'source':      row.get('source', '') or '',
+            'target':      row.get('target', '') or '',
+            'description': row.get('description', '') or '',
+            'weight':      float(row.get('weight', 1.0) or 1.0),
+        })
+    relationships.sort(key=lambda x: x['weight'], reverse=True)
+    relationships = relationships[:100]
 
-    comm_map = {c['community_id']: c['entities'] for c in comm_entities}
-    for comm in communities:
-        comm['entities'] = comm_map.get(comm['id'], [])
+    # ── Stats ─────────────────────────────────────────────────────────────────
+    stats = [
+        {'label': 'Document',     'count': len(docs_df)},
+        {'label': 'Entity',       'count': len(ents_df)},
+        {'label': 'Relationship', 'count': len(rels_df)},
+        {'label': 'Community',    'count': len(crs_df)},
+        {'label': 'TextUnit',     'count': len(tu_df)},
+        {'label': 'Claim',        'count': len(cov_df)},
+    ]
 
     return jsonify({
         'documents':     documents,
@@ -213,74 +316,167 @@ def api_data():
 
 @app.route('/api/clear', methods=['POST'])
 def api_clear():
-    """Wipe all nodes and relationships from Neo4j."""
+    """Wipe pipeline output, input files, and cache. Also clears Neo4j if reachable."""
+    errors = []
+
+    # 1. Clear Neo4j (best-effort — might not be running)
     try:
         driver = get_driver()
         with driver.session() as session:
             session.execute_write(lambda tx: tx.run("MATCH (n) DETACH DELETE n"))
         driver.close()
-        # Also clear input files and cache so a future upload starts fresh
-        for f in os.listdir(INPUT_FOLDER):
-            if f.endswith('.txt'):
-                os.remove(os.path.join(INPUT_FOLDER, f))
-        cache_dir = os.path.join(PROJECT_ROOT, 'cache')
-        if os.path.exists(cache_dir):
-            shutil.rmtree(cache_dir)
-        return jsonify({"ok": True, "message": "Database cleared."})
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        errors.append(f"Neo4j: {e}")
+
+    # 2. Clear input files
+    for f in os.listdir(INPUT_FOLDER):
+        if f.endswith('.txt'):
+            os.remove(os.path.join(INPUT_FOLDER, f))
+
+    # 3. Remove pipeline output (parquet files)
+    if os.path.exists(OUTPUT_FOLDER):
+        shutil.rmtree(OUTPUT_FOLDER)
+
+    # 4. Clear GraphRAG cache
+    cache_dir = os.path.join(PROJECT_ROOT, 'cache')
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+
+    msg = "Cleared." + (f" (warnings: {'; '.join(errors)})" if errors else "")
+    return jsonify({"ok": True, "message": msg})
+
 
 @app.route('/api/documents/<doc_id>', methods=['DELETE'])
 def delete_document(doc_id):
-    """Delete a document from Neo4j and the local filesystem."""
+    """Remove a document's input file. Re-run the pipeline to update the graph data."""
     try:
-        driver = get_driver()
-        with driver.session() as session:
-            # 1. Look up document title to find files
-            record = session.run("MATCH (d:Document {id: $doc_id}) RETURN d.title as title", doc_id=doc_id).single()
-            if not record:
-                return jsonify({"ok": False, "error": "Document not found"}), 404
-            
-            title = record["title"]
-            stem = os.path.splitext(title)[0]
-            
-            # 2. Delete graph nodes
-            session.execute_write(lambda tx: tx.run(
-                "MATCH (d:Document {id: $doc_id}) "
-                "OPTIONAL MATCH (d)-[:CONTAINS]->(t:TextUnit) "
-                "DETACH DELETE d, t", doc_id=doc_id
-            ))
-            session.execute_write(lambda tx: tx.run("MATCH (c:Claim) WHERE NOT (c)-[:EXTRACTED_FROM]->() DETACH DELETE c"))
-            session.execute_write(lambda tx: tx.run("MATCH (e:Entity) WHERE NOT (e)-[:MENTIONED_IN]->() DETACH DELETE e"))
-        driver.close()
+        docs_df = _parquet('documents.parquet')
+        if docs_df.empty:
+            return jsonify({"ok": False, "error": "No documents found"}), 404
+        match = docs_df[docs_df['id'] == doc_id]
+        if match.empty:
+            return jsonify({"ok": False, "error": "Document not found"}), 404
 
-        # 3. Clean up input files
-        txt_path = os.path.join(INPUT_FOLDER, f"{stem}.txt")
-        pdf_path = os.path.join(UPLOAD_FOLDER, f"{stem}.pdf")
-        if os.path.exists(txt_path):
-            os.remove(txt_path)
-        if os.path.exists(pdf_path):
-            os.remove(pdf_path)
+        title = match.iloc[0].get('title', '') or ''
+        stem  = os.path.splitext(title)[0]
 
-        return jsonify({"ok": True, "message": "Document deleted."})
+        # Remove input files
+        for path in [os.path.join(INPUT_FOLDER, f"{stem}.txt"),
+                     os.path.join(UPLOAD_FOLDER, f"{stem}.pdf")]:
+            if os.path.exists(path):
+                os.remove(path)
+
+        # Also clean Neo4j if reachable (best-effort)
+        try:
+            driver = get_driver()
+            with driver.session() as session:
+                session.execute_write(lambda tx: tx.run(
+                    "MATCH (d:Document {id: $doc_id}) "
+                    "OPTIONAL MATCH (d)-[:CONTAINS]->(t:TextUnit) "
+                    "DETACH DELETE d, t", doc_id=doc_id
+                ))
+            driver.close()
+        except Exception:
+            pass
+
+        return jsonify({"ok": True, "message": "Document removed. Re-run the pipeline to refresh the graph data."})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route('/api/db_info')
 def api_db_info():
-    """Return quick node counts so the UI can show current DB state."""
-    try:
-        driver = get_driver()
-        with driver.session() as session:
-            rows = session.run(
-                "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count "
-                "ORDER BY count DESC"
-            ).data()
-        driver.close()
-        total = sum(r['count'] for r in rows)
-        return jsonify({"ok": True, "total": total, "breakdown": rows})
-    except Exception as e:
-        return jsonify({"ok": False, "total": 0, "breakdown": [], "error": str(e)})
+    """Return row counts from parquet output files."""
+    breakdown = []
+    total = 0
+    for label, fname in [
+        ('Document',     'documents.parquet'),
+        ('Entity',       'entities.parquet'),
+        ('Relationship', 'relationships.parquet'),
+        ('Community',    'community_reports.parquet'),
+        ('TextUnit',     'text_units.parquet'),
+        ('Claim',        'covariates.parquet'),
+    ]:
+        count = len(_parquet(fname))
+        breakdown.append({'label': label, 'count': count})
+        total += count
+    return jsonify({"ok": True, "total": total, "breakdown": breakdown})
+
+
+@app.route('/api/umap')
+def api_umap():
+    """Return entity UMAP coordinates read directly from parquet pipeline output."""
+    ents_df  = _parquet('entities.parquet')
+    rels_df  = _parquet('relationships.parquet')
+    comms_df = _parquet('communities.parquet')
+    tu_df    = _parquet('text_units.parquet')
+
+    if ents_df.empty:
+        return jsonify({'error': 'No pipeline output found', 'nodes': [], 'edges': []}), 404
+
+    # ── Community membership: entity_id → finest-level community ─────────────
+    entity_community = {}
+    for _, row in comms_df.iterrows():
+        level    = int(row['level'])    if (row.get('level')     is not None and not math.isnan(float(row['level'] or 0)))    else 999
+        comm_num = int(row['community']) if (row.get('community') is not None and not math.isnan(float(row['community'] or 0))) else None
+        title    = row.get('title', '') or ''
+        for eid in _to_list(row.get('entity_ids')):
+            prev = entity_community.get(eid)
+            if prev is None or level < prev['level']:
+                entity_community[eid] = {'community': comm_num, 'level': level, 'title': title}
+
+    # ── text_unit → document_ids mapping ─────────────────────────────────────
+    tu_to_docs = {}
+    for _, row in tu_df.iterrows():
+        doc_ids = _to_list(row.get('document_ids'))
+        if doc_ids:
+            tu_to_docs[str(row['id'])] = doc_ids
+
+    # ── Nodes ─────────────────────────────────────────────────────────────────
+    nodes = []
+    pos   = {}
+    for _, row in ents_df.iterrows():
+        x, y = row.get('x'), row.get('y')
+        if x is None or y is None or math.isnan(float(x)):
+            continue
+        x, y  = float(x), float(y)
+        eid   = str(row['id'])
+        name  = row.get('title', '') or ''
+        comm  = entity_community.get(eid, {})
+        doc_ids = []
+        for tu_id in _to_list(row.get('text_unit_ids')):
+            for did in tu_to_docs.get(str(tu_id), []):
+                if did not in doc_ids:
+                    doc_ids.append(did)
+        pos[name] = (x, y)
+        nodes.append({
+            'id':              eid,
+            'name':            name,
+            'type':            (row.get('type', '') or '').lower(),
+            'description':     (row.get('description', '') or '')[:400],
+            'degree':          int(row.get('degree', 0) or 0),
+            'frequency':       int(row.get('frequency', 0) or 0),
+            'x': x, 'y': y,
+            'community':       comm.get('community'),
+            'community_title': comm.get('title', ''),
+            'document_ids':    doc_ids,
+        })
+
+    # ── Edges ─────────────────────────────────────────────────────────────────
+    edges = []
+    for _, row in rels_df.iterrows():
+        src, tgt = row.get('source', '') or '', row.get('target', '') or ''
+        if src not in pos or tgt not in pos:
+            continue
+        x0, y0 = pos[src]
+        x1, y1 = pos[tgt]
+        edges.append({
+            'source': src, 'target': tgt,
+            'x0': x0, 'y0': y0, 'x1': x1, 'y1': y1,
+            'weight':      float(row.get('weight', 1.0) or 1.0),
+            'description': (row.get('description', '') or '')[:200],
+        })
+
+    return jsonify({'nodes': nodes, 'edges': edges})
 
 
 if __name__ == '__main__':

@@ -1,15 +1,21 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>GraphRAG Explorer</title>
-  <meta name="description" content="Upload a PDF to extract a knowledge graph and explore entities, communities and relationships." />
+  <meta name="description"
+    content="Upload a PDF to extract a knowledge graph and explore entities, communities and relationships." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap"
+    rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=2" />
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
+
 <body>
 
   <!-- ── Top bar ────────────────────────────────────────────────── -->
@@ -18,18 +24,19 @@
       <div class="logo-icon">🕸</div>
       GraphRAG Explorer
     </div>
-    
+
     <div class="spacer"></div>
     <span class="status-pill idle" id="statusPill"><span class="dot"></span> <span id="statusLabel">Idle</span></span>
-    
+
     <select class="filter-select" id="globalDocFilter" style="margin-right:12px; max-width:250px;">
       <option value="">All Documents</option>
     </select>
-    
-    <button class="topbar-btn" id="deleteDocBtn" style="color: #ef4444; border: 1px solid rgba(239,68,68,0.5); display:none; margin-right:12px;">
+
+    <button class="topbar-btn" id="deleteDocBtn"
+      style="color: #ef4444; border: 1px solid rgba(239,68,68,0.5); display:none; margin-right:12px;">
       🗑 Delete File
     </button>
-    
+
     <button class="topbar-btn primary" id="openUploadModal">⬆ Upload PDF</button>
     <a href="http://localhost:7475" target="_blank" class="topbar-btn">Open Neo4j ↗</a>
   </header>
@@ -47,6 +54,9 @@
     </button>
     <button class="tab-btn" data-tab="communities">
       Communities <span class="tab-count" id="count-communities">—</span>
+    </button>
+    <button class="tab-btn" data-tab="umap" id="umapTabBtn">
+      UMAP <span class="tab-count" id="count-umap">—</span>
     </button>
   </nav>
 
@@ -67,7 +77,15 @@
           </select>
         </div>
         <table class="data-table">
-          <thead><tr><th>Name</th><th>Type</th><th>Degree</th><th>Description</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Type</th>
+              <th>Degree</th>
+              <th>Freq</th>
+              <th>Description</th>
+            </tr>
+          </thead>
           <tbody id="entityBody"></tbody>
         </table>
       </div>
@@ -92,15 +110,24 @@
         No claims extracted yet.
       </div>
       <div id="claimsContent" style="display:none;">
-        <input class="search-box" id="claimSearch" placeholder="Search claims…" />
+        <div class="controls-row">
+          <input class="search-box" id="claimSearch" placeholder="Search subject, type, or description…" />
+          <select class="filter-select" id="claimTypeFilter">
+            <option value="">All Types</option>
+          </select>
+          <select class="filter-select" id="claimStatusFilter">
+            <option value="">All Statuses</option>
+          </select>
+        </div>
         <table class="data-table">
           <thead>
             <tr>
-              <th style="width:12%;">Type</th>
-              <th style="width:20%;">Subject</th>
-              <th style="width:20%;">Object</th>
-              <th style="width:12%;">Status</th>
-              <th style="width:36%;">Description</th>
+              <th style="width:15%;">Subject</th>
+              <th style="width:14%;">Object</th>
+              <th style="width:15%;">Type</th>
+              <th style="width:10%;">Date</th>
+              <th style="width:9%;">Status</th>
+              <th style="width:37%;">Description</th>
             </tr>
           </thead>
           <tbody id="claimBody"></tbody>
@@ -115,7 +142,65 @@
         No communities yet.
       </div>
       <div id="commContent" style="display:none;">
+        <div class="controls-row">
+          <input class="search-box" id="commSearch" placeholder="Search communities…" />
+        </div>
         <div class="comm-grid" id="commList"></div>
+      </div>
+    </div>
+
+    <!-- UMAP tab -->
+    <div class="tab-panel" id="tab-umap">
+      <div class="empty" id="umapEmpty">
+        <span class="big">🗺</span>
+        No UMAP data yet. Run the indexing pipeline first.
+      </div>
+      <div id="umapContent" style="display:none; flex-direction:column; height:100%;">
+
+        <!-- Controls bar -->
+        <div class="umap-controls">
+          <div class="umap-ctrl-group">
+            <span class="umap-ctrl-label">Color by</span>
+            <button class="umap-mode-btn" id="colorByType">Entity Type</button>
+            <button class="umap-mode-btn active" id="colorByCommunity">Community</button>
+          </div>
+          <div class="umap-ctrl-group">
+            <label class="umap-toggle">
+              <input type="checkbox" id="showEdges" checked />
+              <span>Show edges</span>
+            </label>
+          </div>
+          <div class="umap-ctrl-group">
+            <label class="umap-toggle">
+              <input type="checkbox" id="showLabels" />
+              <span>Show labels</span>
+            </label>
+          </div>
+          <div class="umap-ctrl-group">
+            <span class="umap-ctrl-label">Min degree</span>
+            <input type="range" id="minDegree" min="0" max="30" value="0" step="1" style="width:90px;" />
+            <span class="umap-ctrl-label" id="minDegreeVal" style="min-width:18px;">0</span>
+          </div>
+          <div class="umap-ctrl-group" style="flex:1;"></div>
+          <div class="umap-ctrl-group">
+            <input class="search-box" id="umapSearch" placeholder="Highlight entity…"
+              style="width:180px;height:30px;font-size:.78rem;padding:4px 10px;" />
+          </div>
+        </div>
+
+        <!-- Chart + detail panel -->
+        <div style="display:flex;flex:1;min-height:0;gap:0;">
+          <div id="umapChart" style="flex:1;min-width:0;"></div>
+          <div id="umapDetail" class="umap-detail hidden">
+            <button id="umapDetailClose" class="umap-detail-close">✕</button>
+            <div class="umap-detail-type" id="udType"></div>
+            <div class="umap-detail-name" id="udName"></div>
+            <div class="umap-detail-meta" id="udMeta"></div>
+            <div class="umap-detail-desc" id="udDesc"></div>
+            <div class="umap-detail-comm" id="udComm"></div>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -140,399 +225,793 @@
     </div>
   </div>
 
-<script>
-/* ── Tabs ──────────────────────────────────────────────────────── */
-document.querySelectorAll('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-  });
-});
-
-/* ── Modal open/close ──────────────────────────────────────────── */
-const modal = document.getElementById('uploadModal');
-document.getElementById('openUploadModal').addEventListener('click', () => modal.classList.add('open'));
-document.getElementById('closeModal').addEventListener('click', closeModal);
-modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
-function closeModal() {
-  if (pipeline_running) return;   // don't close while running
-  modal.classList.remove('open');
-}
-
-/* ── File drop/select ──────────────────────────────────────────── */
-const dropZone   = document.getElementById('dropZone');
-const fileInput  = document.getElementById('fileInput');
-const uploadBtn  = document.getElementById('uploadBtn');
-const fileNameEl = document.getElementById('modalFileName');
-let selectedFile = null;
-
-document.getElementById('browseBtn').addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => handleFile(fileInput.files[0]));
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone.addEventListener('drop', e => {
-  e.preventDefault(); dropZone.classList.remove('drag-over');
-  const f = e.dataTransfer.files[0];
-  if (f && f.type === 'application/pdf') handleFile(f);
-});
-
-function handleFile(f) {
-  if (!f) return;
-  selectedFile = f;
-  fileNameEl.textContent = f.name;
-  fileNameEl.style.display = 'block';
-  uploadBtn.disabled = false;
-}
-
-/* ── Upload ────────────────────────────────────────────────────── */
-let pipeline_running = false;
-
-uploadBtn.addEventListener('click', async () => {
-  if (!selectedFile) return;
-  uploadBtn.disabled = true;
-  pipeline_running = true;
-  document.getElementById('logBox').innerHTML = '';
-  document.getElementById('logBox').style.display = 'block';
-  const fd = new FormData();
-  fd.append('pdf', selectedFile);
-  const res  = await fetch('/upload', { method: 'POST', body: fd });
-  const json = await res.json();
-  if (json.error) {
-    alert(json.error);
-    uploadBtn.disabled = false;
-    pipeline_running = false;
-    return;
-  }
-  startPolling();
-});
-
-/* ── Status polling ────────────────────────────────────────────── */
-let pollTimer = null;
-let lastLogLen = 0;
-
-function startPolling() {
-  clearInterval(pollTimer);
-  lastLogLen = 0;
-  pollTimer = setInterval(pollStatus, 1500);
-  pollStatus();
-}
-
-async function pollStatus() {
-  const res  = await fetch('/api/status');
-  const data = await res.json();
-  updateStatusUI(data);
-  if (data.status === 'done') {
-    clearInterval(pollTimer);
-    pipeline_running = false;
-    uploadBtn.disabled = false;
-    loadData();
-  } else if (data.status === 'error') {
-    clearInterval(pollTimer);
-    pipeline_running = false;
-    uploadBtn.disabled = false;
-  }
-}
-
-function updateStatusUI(data) {
-  const pill  = document.getElementById('statusPill');
-  const label = document.getElementById('statusLabel');
-  const logBox = document.getElementById('logBox');
-
-  pill.className = 'status-pill ' + data.status;
-  const dot = data.status === 'running'
-    ? '<span class="dot pulse"></span>'
-    : '<span class="dot"></span>';
-  const labelMap = { idle: 'Idle', running: data.stage || 'Running…', done: 'Complete', error: 'Error' };
-  pill.innerHTML = dot + ' <span id="statusLabel">' + (labelMap[data.status] || data.status) + '</span>';
-
-  // Append new log lines
-  if (data.log && data.log.length > lastLogLen) {
-    const newLines = data.log.slice(lastLogLen);
-    lastLogLen = data.log.length;
-    newLines.forEach(line => {
-      const p = document.createElement('p');
-      p.textContent = line;
-      if (line.startsWith('❌') || line.toLowerCase().includes('error')) p.classList.add('error-line');
-      logBox.appendChild(p);
+  <script>
+    /* ── Tabs ──────────────────────────────────────────────────────── */
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      });
     });
-    logBox.scrollTop = logBox.scrollHeight;
-  }
-}
 
-let allDocuments = [];
-
-/* ── Load data from Neo4j API ──────────────────────────────────── */
-async function loadData() {
-  try {
-    const res  = await fetch('/api/data');
-    const data = await res.json();
-    if (data.error) return;
-    
-    // Setup documents filter
-    allDocuments = data.documents || [];
-    const docSelect = document.getElementById('globalDocFilter');
-    // keep selected value
-    const currentDoc = docSelect.value;
-    docSelect.innerHTML = '<option value="">All Documents</option>';
-    allDocuments.forEach(doc => {
-      const opt = document.createElement('option');
-      opt.value = doc.id;
-      // use filename if title is just generic
-      let displayTitle = doc.title || 'Unknown Document';
-      if(displayTitle.length > 30) displayTitle = displayTitle.substring(0, 27) + '...';
-      opt.textContent = displayTitle;
-      docSelect.appendChild(opt);
-    });
-    if (currentDoc) docSelect.value = currentDoc;
-
-    renderEntities(data.entities);
-    renderRelationships(data.relationships);
-    renderClaims(data.claims);
-    renderCommunities(data.communities);
-  } catch(e) { /* Neo4j offline */ }
-}
-
-document.getElementById('globalDocFilter').addEventListener('change', () => {
-  const val = document.getElementById('globalDocFilter').value;
-  document.getElementById('deleteDocBtn').style.display = val ? 'inline-block' : 'none';
-  filterEntities();
-  filterRelationships();
-  filterClaims();
-});
-
-document.getElementById('deleteDocBtn').addEventListener('click', async () => {
-  const docId = document.getElementById('globalDocFilter').value;
-  if (!docId) return;
-  if (!confirm("Are you sure you want to delete this document? It will be removed from Neo4j and the local filesystem.")) return;
-  
-  const btn = document.getElementById('deleteDocBtn');
-  btn.disabled = true;
-  btn.textContent = 'Deleting...';
-  
-  try {
-    const res = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
-    const json = await res.json();
-    if (json.ok) {
-       document.getElementById('globalDocFilter').value = "";
-       document.getElementById('deleteDocBtn').style.display = "none";
-       // Reload data fully from Neo4j
-       await loadData();
-    } else {
-       alert(json.error || "Failed to delete document.");
+    /* ── Modal open/close ──────────────────────────────────────────── */
+    const modal = document.getElementById('uploadModal');
+    document.getElementById('openUploadModal').addEventListener('click', () => modal.classList.add('open'));
+    document.getElementById('closeModal').addEventListener('click', closeModal);
+    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+    function closeModal() {
+      if (pipeline_running) return;   // don't close while running
+      modal.classList.remove('open');
     }
-  } catch (e) {
-    alert("Error communicating with server.");
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '🗑 Delete File';
-  }
-});
 
-/* ── Tab counts helper ─────────────────────────────────────────── */
+    /* ── File drop/select ──────────────────────────────────────────── */
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const fileNameEl = document.getElementById('modalFileName');
+    let selectedFile = null;
 
-function setCount(tabKey, n) {
-  const el = document.getElementById('count-' + tabKey);
-  if (el) el.textContent = n > 0 ? n : '—';
-}
+    document.getElementById('browseBtn').addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => handleFile(fileInput.files[0]));
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault(); dropZone.classList.remove('drag-over');
+      const f = e.dataTransfer.files[0];
+      if (f && f.type === 'application/pdf') handleFile(f);
+    });
 
-/* ── Entities ─────────────────────────────────────────────────── */
-let allEntities = [];
-function renderEntities(entities) {
-  allEntities = entities || [];
-  setCount('entities', allEntities.length);
-  const empty   = document.getElementById('entitiesEmpty');
-  const content = document.getElementById('entitiesContent');
-  if (!allEntities.length) { empty.style.display=''; content.style.display='none'; return; }
-  empty.style.display = 'none'; content.style.display = 'block';
-  
-  // Populate type filter
-  const typeFilter = document.getElementById('typeFilter');
-  const types = [...new Set(allEntities.map(e => e.type))].filter(Boolean).sort();
-  typeFilter.innerHTML = '<option value="">All Types</option>';
-  types.forEach(t => {
-    const opt = document.createElement('option');
-    opt.value = t;
-    opt.textContent = t;
-    typeFilter.appendChild(opt);
-  });
+    function handleFile(f) {
+      if (!f) return;
+      selectedFile = f;
+      fileNameEl.textContent = f.name;
+      fileNameEl.style.display = 'block';
+      uploadBtn.disabled = false;
+    }
 
-  drawEntityTable(allEntities);
-}
-function drawEntityTable(list) {
-  const tbody = document.getElementById('entityBody');
-  tbody.innerHTML = '';
-  list.forEach(e => {
-    const tr  = document.createElement('tr');
-    const type = (e.type || '').toLowerCase();
-    tr.innerHTML = `
+    /* ── Upload ────────────────────────────────────────────────────── */
+    let pipeline_running = false;
+
+    uploadBtn.addEventListener('click', async () => {
+      if (!selectedFile) return;
+      uploadBtn.disabled = true;
+      pipeline_running = true;
+      document.getElementById('logBox').innerHTML = '';
+      document.getElementById('logBox').style.display = 'block';
+      const fd = new FormData();
+      fd.append('pdf', selectedFile);
+      const res = await fetch('/upload', { method: 'POST', body: fd });
+      const json = await res.json();
+      if (json.error) {
+        alert(json.error);
+        uploadBtn.disabled = false;
+        pipeline_running = false;
+        return;
+      }
+      startPolling();
+    });
+
+    /* ── Status polling ────────────────────────────────────────────── */
+    let pollTimer = null;
+    let lastLogLen = 0;
+
+    function startPolling() {
+      clearInterval(pollTimer);
+      lastLogLen = 0;
+      pollTimer = setInterval(pollStatus, 1500);
+      pollStatus();
+    }
+
+    async function pollStatus() {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+      updateStatusUI(data);
+      if (data.status === 'done') {
+        clearInterval(pollTimer);
+        pipeline_running = false;
+        uploadBtn.disabled = false;
+        loadData();
+      } else if (data.status === 'error') {
+        clearInterval(pollTimer);
+        pipeline_running = false;
+        uploadBtn.disabled = false;
+      }
+    }
+
+    function updateStatusUI(data) {
+      const pill = document.getElementById('statusPill');
+      const label = document.getElementById('statusLabel');
+      const logBox = document.getElementById('logBox');
+
+      pill.className = 'status-pill ' + data.status;
+      const dot = data.status === 'running'
+        ? '<span class="dot pulse"></span>'
+        : '<span class="dot"></span>';
+      const labelMap = { idle: 'Idle', running: data.stage || 'Running…', done: 'Complete', error: 'Error' };
+      pill.innerHTML = dot + ' <span id="statusLabel">' + (labelMap[data.status] || data.status) + '</span>';
+
+      // Append new log lines
+      if (data.log && data.log.length > lastLogLen) {
+        const newLines = data.log.slice(lastLogLen);
+        lastLogLen = data.log.length;
+        newLines.forEach(line => {
+          const p = document.createElement('p');
+          p.textContent = line;
+          if (line.startsWith('❌') || line.toLowerCase().includes('error')) p.classList.add('error-line');
+          logBox.appendChild(p);
+        });
+        logBox.scrollTop = logBox.scrollHeight;
+      }
+    }
+
+    let allDocuments = [];
+
+    /* ── Load data ────────────────────────────────────────────────── */
+    async function loadData() {
+      try {
+        const res = await fetch('/api/data');
+        const data = await res.json();
+        if (data.error) return;
+
+        // Setup documents filter
+        allDocuments = data.documents || [];
+        const docSelect = document.getElementById('globalDocFilter');
+        // keep selected value
+        const currentDoc = docSelect.value;
+        docSelect.innerHTML = '<option value="">All Documents</option>';
+        allDocuments.forEach(doc => {
+          const opt = document.createElement('option');
+          opt.value = doc.id;
+          // use filename if title is just generic
+          let displayTitle = doc.title || 'Unknown Document';
+          if (displayTitle.length > 30) displayTitle = displayTitle.substring(0, 27) + '...';
+          opt.textContent = displayTitle;
+          docSelect.appendChild(opt);
+        });
+        if (currentDoc) docSelect.value = currentDoc;
+
+        renderEntities(data.entities);
+        renderRelationships(data.relationships);
+        renderClaims(data.claims);
+        renderCommunities(data.communities);
+      } catch (e) { console.warn('Failed to load data:', e); }
+    }
+
+    document.getElementById('globalDocFilter').addEventListener('change', () => {
+      const val = document.getElementById('globalDocFilter').value;
+      document.getElementById('deleteDocBtn').style.display = val ? 'inline-block' : 'none';
+      filterEntities();
+      filterRelationships();
+      filterClaims();
+      filterCommunities();
+      if (umapLoaded) renderUmap();
+    });
+
+    document.getElementById('deleteDocBtn').addEventListener('click', async () => {
+      const docId = document.getElementById('globalDocFilter').value;
+      if (!docId) return;
+      if (!confirm("Remove this document's input file? You'll need to re-run the pipeline to update the graph data.")) return;
+
+      const btn = document.getElementById('deleteDocBtn');
+      btn.disabled = true;
+      btn.textContent = 'Deleting...';
+
+      try {
+        const res = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
+        const json = await res.json();
+        if (json.ok) {
+          document.getElementById('globalDocFilter').value = "";
+          document.getElementById('deleteDocBtn').style.display = "none";
+          // Reload data
+          await loadData();
+        } else {
+          alert(json.error || "Failed to delete document.");
+        }
+      } catch (e) {
+        alert("Error communicating with server.");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🗑 Delete File';
+      }
+    });
+
+    /* ── Tab counts helper ─────────────────────────────────────────── */
+
+    function setCount(tabKey, n) {
+      const el = document.getElementById('count-' + tabKey);
+      if (el) el.textContent = n > 0 ? n : '—';
+    }
+
+    /* ── Entities ─────────────────────────────────────────────────── */
+    let allEntities = [];
+    function renderEntities(entities) {
+      allEntities = entities || [];
+      setCount('entities', allEntities.length);
+      const empty = document.getElementById('entitiesEmpty');
+      const content = document.getElementById('entitiesContent');
+      if (!allEntities.length) { empty.style.display = ''; content.style.display = 'none'; return; }
+      empty.style.display = 'none'; content.style.display = 'block';
+
+      // Populate type filter
+      const typeFilter = document.getElementById('typeFilter');
+      const types = [...new Set(allEntities.map(e => e.type))].filter(Boolean).sort();
+      typeFilter.innerHTML = '<option value="">All Types</option>';
+      types.forEach(t => {
+        const opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = t;
+        typeFilter.appendChild(opt);
+      });
+
+      drawEntityTable(allEntities);
+    }
+    function drawEntityTable(list) {
+      const tbody = document.getElementById('entityBody');
+      tbody.innerHTML = '';
+      list.forEach(e => {
+        const tr = document.createElement('tr');
+        const type = (e.type || '').toLowerCase();
+        tr.innerHTML = `
       <td style="font-weight:600;">${esc(e.name)}</td>
       <td><span class="badge ${type}">${esc(e.type || '—')}</span></td>
       <td>${e.degree ?? '—'}</td>
+      <td style="color:var(--text-muted);">${e.frequency ?? '—'}</td>
       <td style="color:var(--text-muted);font-size:0.78rem;">${esc(e.description || '')}</td>`;
-    tbody.appendChild(tr);
-  });
-}
+        tbody.appendChild(tr);
+      });
+    }
 
-function filterEntities() {
-  const q = document.getElementById('entitySearch').value.toLowerCase();
-  const typeSelection = document.getElementById('typeFilter').value;
-  const docSelection = document.getElementById('globalDocFilter').value;
-  
-  const filtered = allEntities.filter(e => {
-    const matchesSearch = (e.name||'').toLowerCase().includes(q) || (e.description||'').toLowerCase().includes(q);
-    const matchesType = !typeSelection || e.type === typeSelection;
-    const matchesDoc = !docSelection || (e.document_ids && e.document_ids.includes(docSelection));
-    return matchesSearch && matchesType && matchesDoc;
-  });
-  
-  setCount('entities', filtered.length);
-  drawEntityTable(filtered);
-}
+    function filterEntities() {
+      const q = document.getElementById('entitySearch').value.toLowerCase();
+      const typeSelection = document.getElementById('typeFilter').value;
+      const docSelection = document.getElementById('globalDocFilter').value;
 
-document.getElementById('entitySearch').addEventListener('input', filterEntities);
-document.getElementById('typeFilter').addEventListener('change', filterEntities);
+      const filtered = allEntities.filter(e => {
+        const matchesSearch = (e.name || '').toLowerCase().includes(q) || (e.description || '').toLowerCase().includes(q);
+        const matchesType = !typeSelection || e.type === typeSelection;
+        const matchesDoc = !docSelection || (e.document_ids && e.document_ids.includes(docSelection));
+        return matchesSearch && matchesType && matchesDoc;
+      });
 
-/* ── Relationships ────────────────────────────────────────────── */
-let allRels = [];
-function renderRelationships(rels) {
-  allRels = rels || [];
-  setCount('relationships', allRels.length);
-  const empty   = document.getElementById('relsEmpty');
-  const content = document.getElementById('relsContent');
-  if (!allRels.length) { empty.style.display=''; content.style.display='none'; return; }
-  empty.style.display = 'none'; content.style.display = 'block';
-  drawRelList(allRels);
-}
-function drawRelList(list) {
-  const el = document.getElementById('relList');
-  el.innerHTML = '';
-  list.forEach(r => {
-    const div = document.createElement('div');
-    div.className = 'rel-row';
-    div.innerHTML = `
+      setCount('entities', filtered.length);
+      drawEntityTable(filtered);
+    }
+
+    document.getElementById('entitySearch').addEventListener('input', filterEntities);
+    document.getElementById('typeFilter').addEventListener('change', filterEntities);
+
+    /* ── Relationships ────────────────────────────────────────────── */
+    let allRels = [];
+    function renderRelationships(rels) {
+      allRels = rels || [];
+      setCount('relationships', allRels.length);
+      const empty = document.getElementById('relsEmpty');
+      const content = document.getElementById('relsContent');
+      if (!allRels.length) { empty.style.display = ''; content.style.display = 'none'; return; }
+      empty.style.display = 'none'; content.style.display = 'block';
+      drawRelList(allRels);
+    }
+    function drawRelList(list) {
+      const el = document.getElementById('relList');
+      el.innerHTML = '';
+      list.forEach(r => {
+        const div = document.createElement('div');
+        div.className = 'rel-row';
+        const wt = r.weight ? r.weight.toFixed(1) : null;
+        const wtBadge = wt ? `<span style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;font-size:.7rem;padding:1px 7px;color:var(--text-muted);margin-right:6px;white-space:nowrap;">w: ${wt}</span>` : '';
+        div.innerHTML = `
       <div class="rel-source">${esc(r.source)}</div>
       <div class="rel-arrow">→</div>
       <div class="rel-target">${esc(r.target)}</div>
-      <div class="rel-desc">${esc(r.description || '')}</div>`;
-    el.appendChild(div);
-  });
-}
-function filterRelationships() {
-  const q = document.getElementById('relSearch').value.toLowerCase();
-  const docSelection = document.getElementById('globalDocFilter').value;
-  
-  // To verify relations correctly we'd map relation -> documents.
-  // For UI responsiveness, since we didn't fetch documents for edges, 
-  // we could check if either source or target matches the doc filter.
-  // This is a rough filter purely on the UI side.
-  let activeEntities = new Set();
-  if (docSelection) {
-     allEntities.forEach(e => {
-       if (e.document_ids && e.document_ids.includes(docSelection)) {
-         activeEntities.add(e.name);
-       }
-     });
-  }
+      <div class="rel-desc">${wtBadge}${esc(r.description || '')}</div>`;
+        el.appendChild(div);
+      });
+    }
+    function filterRelationships() {
+      const q = document.getElementById('relSearch').value.toLowerCase();
+      const docSelection = document.getElementById('globalDocFilter').value;
 
-  const filtered = allRels.filter(r => {
-    const matchesSearch = (r.source||'').toLowerCase().includes(q) ||
-                          (r.target||'').toLowerCase().includes(q) ||
-                          (r.description||'').toLowerCase().includes(q);
-    const matchesDoc = !docSelection || activeEntities.has(r.source) || activeEntities.has(r.target);
-    return matchesSearch && matchesDoc;
-  });
+      // To verify relations correctly we'd map relation -> documents.
+      // For UI responsiveness, since we didn't fetch documents for edges, 
+      // we could check if either source or target matches the doc filter.
+      // This is a rough filter purely on the UI side.
+      let activeEntities = new Set();
+      if (docSelection) {
+        allEntities.forEach(e => {
+          if (e.document_ids && e.document_ids.includes(docSelection)) {
+            activeEntities.add(e.name);
+          }
+        });
+      }
 
-  setCount('relationships', filtered.length);
-  drawRelList(filtered);
-}
+      const filtered = allRels.filter(r => {
+        const matchesSearch = (r.source || '').toLowerCase().includes(q) ||
+          (r.target || '').toLowerCase().includes(q) ||
+          (r.description || '').toLowerCase().includes(q);
+        const matchesDoc = !docSelection || activeEntities.has(r.source) || activeEntities.has(r.target);
+        return matchesSearch && matchesDoc;
+      });
 
-document.getElementById('relSearch').addEventListener('input', filterRelationships);
+      setCount('relationships', filtered.length);
+      drawRelList(filtered);
+    }
 
-/* ── Claims ───────────────────────────────────────────────────── */
-let allClaims = [];
-function renderClaims(claims) {
-  allClaims = claims || [];
-  setCount('claims', allClaims.length);
-  const empty   = document.getElementById('claimsEmpty');
-  const content = document.getElementById('claimsContent');
-  if (!allClaims.length) { empty.style.display=''; content.style.display='none'; return; }
-  empty.style.display = 'none'; content.style.display = 'block';
-  drawClaimTable(allClaims);
-}
-function drawClaimTable(list) {
-  const tbody = document.getElementById('claimBody');
-  tbody.innerHTML = '';
-  list.forEach(c => {
-    const tr = document.createElement('tr');
-    const status = (c.status || '').toLowerCase();
-    const statusClass = status ? `status-${status}` : '';
-    tr.innerHTML = `
-      <td>${esc(c.type || '—')}</td>
+    document.getElementById('relSearch').addEventListener('input', filterRelationships);
+
+    /* ── Claims ───────────────────────────────────────────────────── */
+    let allClaims = [];
+    function renderClaims(claims) {
+      allClaims = claims || [];
+      setCount('claims', allClaims.length);
+      const empty = document.getElementById('claimsEmpty');
+      const content = document.getElementById('claimsContent');
+      if (!allClaims.length) { empty.style.display = ''; content.style.display = 'none'; return; }
+      empty.style.display = 'none'; content.style.display = 'block';
+
+      // Populate type filter
+      const typeFilter = document.getElementById('claimTypeFilter');
+      const curType = typeFilter.value;
+      const types = [...new Set(allClaims.map(c => c.type).filter(Boolean))].sort();
+      typeFilter.innerHTML = '<option value="">All Types</option>';
+      types.forEach(t => {
+        const opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = t.charAt(0) + t.slice(1).toLowerCase().replace(/_/g, ' ');
+        typeFilter.appendChild(opt);
+      });
+      if (curType) typeFilter.value = curType;
+
+      // Populate status filter
+      const statusFilter = document.getElementById('claimStatusFilter');
+      const curStatus = statusFilter.value;
+      const statuses = [...new Set(allClaims.map(c => c.status).filter(Boolean))].sort();
+      statusFilter.innerHTML = '<option value="">All Statuses</option>';
+      statuses.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s;
+        opt.textContent = s.charAt(0) + s.slice(1).toLowerCase();
+        statusFilter.appendChild(opt);
+      });
+      if (curStatus) statusFilter.value = curStatus;
+
+      filterClaims();
+    }
+
+    function drawClaimTable(list) {
+      const tbody = document.getElementById('claimBody');
+      tbody.innerHTML = '';
+      list.forEach(c => {
+        const tr = document.createElement('tr');
+        const status = (c.status || '').toLowerCase();
+        const statusClass = status ? `status-${status}` : '';
+        const type = (c.type || '').toLowerCase().replace(/_/g, ' ');
+        let dateStr = '';
+        if (c.start_date && c.end_date && c.start_date === c.end_date) {
+          dateStr = c.start_date;
+        } else if (c.start_date && c.end_date) {
+          dateStr = `${c.start_date} – ${c.end_date}`;
+        } else if (c.start_date) {
+          dateStr = c.start_date;
+        }
+        tr.innerHTML = `
       <td style="font-weight:600;">${esc(c.subject || '—')}</td>
-      <td style="font-weight:600;">${esc(c.object || '—')}</td>
+      <td>${esc(!c.object || c.object.toUpperCase() === 'NONE' ? '—' : c.object)}</td>
+      <td><span class="badge claim-type">${esc(type || '—')}</span></td>
+      <td style="color:var(--text-muted);font-size:0.75rem;white-space:nowrap;">${esc(dateStr)}</td>
       <td><span class="badge ${statusClass}">${esc(c.status || '—')}</span></td>
       <td style="color:var(--text-muted);font-size:0.78rem;">${esc(c.description || '')}</td>`;
-    tbody.appendChild(tr);
-  });
-}
-function filterClaims() {
-  const q = document.getElementById('claimSearch').value.toLowerCase();
-  const docSelection = document.getElementById('globalDocFilter').value;
-  
-  const filtered = allClaims.filter(c => {
-    const matchesSearch = (c.type||'').toLowerCase().includes(q) ||
-                          (c.description||'').toLowerCase().includes(q) ||
-                          (c.subject||'').toLowerCase().includes(q);
-    const matchesDoc = !docSelection || c.document_id === docSelection;
-    return matchesSearch && matchesDoc;
-  });
-  
-  setCount('claims', filtered.length);
-  drawClaimTable(filtered);
-}
+        tbody.appendChild(tr);
+      });
+    }
 
-document.getElementById('claimSearch').addEventListener('input', filterClaims);
+    function filterClaims() {
+      const q = document.getElementById('claimSearch').value.toLowerCase();
+      const typeSelection = document.getElementById('claimTypeFilter').value;
+      const statusSel = document.getElementById('claimStatusFilter').value;
+      const docSelection = document.getElementById('globalDocFilter').value;
 
-/* ── Communities ──────────────────────────────────────────────── */
-function renderCommunities(communities) {
-  const list = communities || [];
-  setCount('communities', list.length);
-  const empty   = document.getElementById('commEmpty');
-  const content = document.getElementById('commContent');
-  const grid    = document.getElementById('commList');
-  if (!list.length) { empty.style.display=''; content.style.display='none'; return; }
-  empty.style.display = 'none'; content.style.display = 'block';
-  grid.innerHTML = '';
-  list.forEach(c => {
-    const card     = document.createElement('div');
-    card.className = 'comm-card';
-    const entities = c.entities || [];
-    const chips    = entities.map(e => `<span class="entity-chip">${esc(e.name)}</span>`).join('');
-    const summary  = c.summary ? `<p class="comm-summary">${esc(c.summary)}</p>` : '';
-    card.innerHTML = `
+      const filtered = allClaims.filter(c => {
+        const matchesSearch = !q ||
+          (c.type || '').toLowerCase().includes(q) ||
+          (c.description || '').toLowerCase().includes(q) ||
+          (c.subject || '').toLowerCase().includes(q) ||
+          (c.object && c.object.toUpperCase() !== 'NONE' ? c.object.toLowerCase().includes(q) : false);
+        const matchesType = !typeSelection || c.type === typeSelection;
+        const matchesStatus = !statusSel || c.status === statusSel;
+        const matchesDoc = !docSelection || c.document_id === docSelection;
+        return matchesSearch && matchesType && matchesStatus && matchesDoc;
+      });
+
+      setCount('claims', filtered.length);
+      drawClaimTable(filtered);
+    }
+
+    document.getElementById('claimSearch').addEventListener('input', filterClaims);
+    document.getElementById('claimTypeFilter').addEventListener('change', filterClaims);
+    document.getElementById('claimStatusFilter').addEventListener('change', filterClaims);
+
+    /* ── Communities ──────────────────────────────────────────────── */
+    let allCommunities = [];
+
+    function renderCommunities(communities) {
+      allCommunities = communities || [];
+      filterCommunities();
+    }
+
+    function filterCommunities() {
+      const docSelection = document.getElementById('globalDocFilter').value;
+      const q = document.getElementById('commSearch').value.toLowerCase();
+
+      let activeEntities = new Set();
+      if (docSelection) {
+        allEntities.forEach(e => {
+          if (e.document_ids && e.document_ids.includes(docSelection)) {
+            activeEntities.add(e.id);
+          }
+        });
+      }
+
+      const filtered = allCommunities.filter(c => {
+        const matchesDoc = !docSelection || (c.entities || []).some(ent => activeEntities.has(ent.id));
+        const matchesSearch = !q ||
+          (c.report_title || '').toLowerCase().includes(q) ||
+          (c.base_title || '').toLowerCase().includes(q) ||
+          (c.summary || '').toLowerCase().includes(q);
+        return matchesDoc && matchesSearch;
+      });
+
+      setCount('communities', filtered.length);
+      drawCommunityGrid(filtered);
+    }
+
+    function drawCommunityGrid(list) {
+      const empty = document.getElementById('commEmpty');
+      const content = document.getElementById('commContent');
+      const grid = document.getElementById('commList');
+      if (!list.length) { empty.style.display = ''; content.style.display = 'none'; return; }
+      empty.style.display = 'none'; content.style.display = 'block';
+      grid.innerHTML = '';
+
+      list.forEach(c => {
+        const card = document.createElement('div');
+        card.className = 'comm-card';
+        const entities = c.entities || [];
+
+        const chips = entities.map(e => {
+          const type = (e.type || '').toLowerCase();
+          return `<span class="entity-chip ${type}">${esc(e.name)}</span>`;
+        }).join('');
+
+        const summary = c.summary ? `<p class="comm-summary">${esc(c.summary)}</p>` : '';
+
+        const rank = typeof c.rank === 'number' ? c.rank : 0;
+        const rankClass = rank >= 8 ? 'rank-high' : rank >= 6 ? 'rank-mid' : 'rank-low';
+
+        const findingsEl = c.findings_count > 0
+          ? `<div class="comm-findings">📋 ${c.findings_count} findings</div>`
+          : '';
+
+        card.innerHTML = `
       <div class="comm-header">
-        <div class="comm-title">${esc(c.title || 'Community')}</div>
+        <span class="comm-number">${esc(c.base_title)}</span>
+        <div class="comm-title">${esc(c.report_title || c.base_title)}</div>
+        <span class="comm-rank ${rankClass}" title="Quality rank (0–10)">${rank.toFixed(1)}</span>
         <div class="comm-meta">Level ${c.level ?? '?'} · ${entities.length} entities</div>
         <div class="comm-arrow">▼</div>
       </div>
       <div class="comm-body">
         ${summary}
+        ${findingsEl}
         <div class="entity-chips">${chips || '<span style="color:var(--text-muted);font-size:.8rem;">No entities</span>'}</div>
       </div>`;
-    card.querySelector('.comm-header').addEventListener('click', () => card.classList.toggle('open'));
-    grid.appendChild(card);
-  });
-}
+        card.querySelector('.comm-header').addEventListener('click', () => card.classList.toggle('open'));
+        grid.appendChild(card);
+      });
+    }
 
-/* ── Utils ────────────────────────────────────────────────────── */
-function esc(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
+    document.getElementById('commSearch').addEventListener('input', filterCommunities);
 
-/* Auto-load on page open */
-loadData();
-</script>
+    /* ── Utils ────────────────────────────────────────────────────── */
+    function esc(str) {
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    /* Auto-load on page open */
+    loadData();
+
+    /* ── UMAP Visualization ─────────────────────────────────────────── */
+
+    const TYPE_COLORS = {
+      geo: '#22c55e',   // badge.geo
+      person: '#fbbf24',   // badge.person
+      organization: '#a78bfa',   // badge.organization
+      event: '#f87171',   // badge.event
+      product: '#22d3ee',   // badge.product
+      technology: '#f59e0b',   // badge.technology (--warning)
+      religion: '#fb923c',
+      institution: '#38bdf8',
+      ideology: '#e879f9',
+      concept: '#4ade80',
+      sect: '#f43f5e',
+      document: '#94a3b8',
+      text: '#cbd5e1',
+    };
+    const FALLBACK_COLOR = '#94a3b8';
+
+    // Palette for community coloring (up to 24 distinct communities)
+    const COMM_PALETTE = [
+      '#5b7ef5', '#a78bfa', '#34d399', '#fbbf24', '#f472b6', '#22d3ee',
+      '#fb7185', '#4ade80', '#facc15', '#38bdf8', '#e879f9', '#2dd4bf',
+      '#f97316', '#818cf8', '#86efac', '#fde68a', '#f9a8d4', '#67e8f9',
+      '#c084fc', '#6ee7b7', '#fcd34d', '#93c5fd', '#f0abfc', '#5eead4',
+    ];
+
+    let umapNodes = [];
+    let umapEdges = [];
+    let umapColorMode = 'community';   // 'type' | 'community'
+    let umapChart = null;
+
+    document.getElementById('colorByType').addEventListener('click', () => setColorMode('type'));
+    document.getElementById('colorByCommunity').addEventListener('click', () => setColorMode('community'));
+    document.getElementById('showEdges').addEventListener('change', renderUmap);
+    document.getElementById('showLabels').addEventListener('change', renderUmap);
+    document.getElementById('minDegree').addEventListener('input', function () {
+      document.getElementById('minDegreeVal').textContent = this.value;
+      renderUmap();
+    });
+    document.getElementById('umapSearch').addEventListener('input', renderUmap);
+    document.getElementById('umapDetailClose').addEventListener('click', () => {
+      document.getElementById('umapDetail').classList.add('hidden');
+    });
+
+    // Load UMAP data when the tab is first activated
+    let umapLoaded = false;
+    document.getElementById('umapTabBtn').addEventListener('click', () => {
+      if (!umapLoaded) { umapLoaded = true; loadUmapData(); }
+      else { triggerResize(); }
+    });
+
+    // Also reload after pipeline completes
+    const _origLoadData = loadData;
+    window.loadData = async function () {
+      await _origLoadData();
+      if (umapLoaded) { await loadUmapData(); }
+    };
+
+    async function loadUmapData() {
+      try {
+        const res = await fetch('/api/umap');
+        const data = await res.json();
+        if (data.error || !data.nodes || !data.nodes.length) {
+          document.getElementById('umapEmpty').style.display = '';
+          document.getElementById('umapContent').style.display = 'none';
+          return;
+        }
+        umapNodes = data.nodes;
+        umapEdges = data.edges;
+
+        // Set slider max to 95th-percentile degree
+        const degrees = umapNodes.map(n => n.degree).sort((a, b) => a - b);
+        const p95 = degrees[Math.floor(degrees.length * 0.95)] || 20;
+        document.getElementById('minDegree').max = p95;
+
+        // Update UMAP count badge
+        document.getElementById('count-umap').textContent = umapNodes.length;
+
+        document.getElementById('umapEmpty').style.display = 'none';
+        document.getElementById('umapContent').style.display = 'flex';
+        document.getElementById('umapContent').style.flexDirection = 'column';
+
+        renderUmap();
+      } catch (e) {
+        console.warn('UMAP load failed:', e);
+      }
+    }
+
+    function setColorMode(mode) {
+      umapColorMode = mode;
+      document.getElementById('colorByType').classList.toggle('active', mode === 'type');
+      document.getElementById('colorByCommunity').classList.toggle('active', mode === 'community');
+      renderUmap();
+    }
+
+    function renderUmap() {
+      const minDeg = parseInt(document.getElementById('minDegree').value, 10) || 0;
+      const showEdges = document.getElementById('showEdges').checked;
+      const showLabels = document.getElementById('showLabels').checked;
+      const searchTerm = document.getElementById('umapSearch').value.trim().toLowerCase();
+      const docFilter = document.getElementById('globalDocFilter').value;
+
+      const visible = umapNodes.filter(n =>
+        n.degree >= minDeg &&
+        (!docFilter || (n.document_ids && n.document_ids.includes(docFilter)))
+      );
+
+      const visibleNames = new Set(visible.map(n => n.name));
+
+      // ── Edge trace ──────────────────────────────────────────────────
+      const edgeTraces = [];
+      if (showEdges) {
+        const ex = [], ey = [], et = [];
+        umapEdges.forEach(e => {
+          if (!visibleNames.has(e.source) || !visibleNames.has(e.target)) return;
+          ex.push(e.x0, e.x1, null);
+          ey.push(e.y0, e.y1, null);
+          et.push(`${e.source} → ${e.target}<br><i>${e.description || ''}</i>`, '', '');
+        });
+        edgeTraces.push({
+          type: 'scatter',
+          mode: 'lines',
+          x: ex, y: ey,
+          hoverinfo: 'none',
+          line: { color: 'rgba(100,116,139,0.25)', width: 0.8 },
+          name: 'Edges',
+          showlegend: false,
+        });
+      }
+
+      // ── Node traces (one per group for legend) ───────────────────────
+      const nodeTraces = [];
+
+      if (umapColorMode === 'type') {
+        const byType = {};
+        visible.forEach(n => {
+          const k = n.type || 'unknown';
+          if (!byType[k]) byType[k] = [];
+          byType[k].push(n);
+        });
+
+        Object.entries(byType).sort((a, b) => a[0].localeCompare(b[0])).forEach(([type, nodes]) => {
+          const color = TYPE_COLORS[type] || FALLBACK_COLOR;
+          nodeTraces.push(makeNodeTrace(nodes, type, color, searchTerm, showLabels));
+        });
+
+      } else {
+        // Color by community
+        const comms = [...new Set(visible.map(n => n.community))].sort((a, b) => (a ?? 999) - (b ?? 999));
+        const commColorMap = {};
+        comms.forEach((c, i) => { commColorMap[c] = COMM_PALETTE[i % COMM_PALETTE.length]; });
+
+        const byComm = {};
+        visible.forEach(n => {
+          const k = n.community ?? 'none';
+          if (!byComm[k]) byComm[k] = [];
+          byComm[k].push(n);
+        });
+
+        Object.entries(byComm).sort().forEach(([comm, nodes]) => {
+          const color = commColorMap[comm === 'none' ? null : parseInt(comm)] || FALLBACK_COLOR;
+          const label = nodes[0]?.community_title || `Community ${comm}`;
+          nodeTraces.push(makeNodeTrace(nodes, label, color, searchTerm, showLabels));
+        });
+      }
+
+      const allTraces = [...edgeTraces, ...nodeTraces];
+
+      const layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#e2e8f0', family: 'Inter, sans-serif', size: 12 },
+        margin: { t: 12, r: 12, b: 40, l: 40 },
+        xaxis: {
+          showgrid: true, gridcolor: 'rgba(255,255,255,0.05)', zeroline: false,
+          tickfont: { color: '#8892a4', size: 10 }, showticklabels: true,
+          title: { text: 'UMAP-1', font: { color: '#8892a4', size: 11 } },
+        },
+        yaxis: {
+          showgrid: true, gridcolor: 'rgba(255,255,255,0.05)', zeroline: false,
+          tickfont: { color: '#8892a4', size: 10 }, showticklabels: true,
+          title: { text: 'UMAP-2', font: { color: '#8892a4', size: 11 } },
+        },
+        legend: {
+          bgcolor: 'rgba(26,29,39,0.7)',
+          bordercolor: 'rgba(255,255,255,0.05)', borderwidth: 1,
+          font: { color: '#e2e8f0', size: 11 },
+          itemsizing: 'constant',
+          x: 1.01, y: 1, xanchor: 'left', yanchor: 'top',
+        },
+        hovermode: 'closest',
+        hoverlabel: {
+          bgcolor: '#1a1d27', bordercolor: 'rgba(255,255,255,0.08)',
+          font: { color: '#e2e8f0', size: 12, family: 'Inter, sans-serif' },
+          align: 'left',
+        },
+        dragmode: 'pan',
+      };
+
+      const config = {
+        responsive: true,
+        scrollZoom: true,
+        displayModeBar: true,
+        modeBarButtonsToRemove: ['select2d', 'lasso2d', 'autoScale2d', 'hoverClosestCartesian', 'hoverCompareCartesian'],
+        displaylogo: false,
+        toImageButtonOptions: { format: 'png', scale: 2 },
+      };
+
+      const chartEl = document.getElementById('umapChart');
+      if (!umapChart) {
+        Plotly.newPlot(chartEl, allTraces, layout, config);
+        umapChart = chartEl;
+
+        // Click handler — show detail panel
+        chartEl.on('plotly_click', data => {
+          const pt = data.points[0];
+          if (!pt || pt.data.mode === 'lines') return;
+          const nodeName = pt.text || (pt.data.text && pt.data.text[pt.pointIndex !== undefined ? pt.pointIndex : pt.pointNumber]);
+          const node = umapNodes.find(n => n.name === nodeName);
+          if (node) showUmapDetail(node);
+        });
+      } else {
+        Plotly.react(chartEl, allTraces, layout, config);
+      }
+    }
+
+    function makeNodeTrace(nodes, label, color, searchTerm, showLabels) {
+      const xs = [], ys = [], texts = [], sizes = [], opacities = [], hovers = [];
+
+      nodes.forEach(n => {
+        xs.push(n.x);
+        ys.push(n.y);
+        texts.push(n.name);
+        // Size: proportional to degree, clamped
+        const sz = Math.max(5, Math.min(22, 5 + Math.sqrt(n.degree) * 2.5));
+        sizes.push(sz);
+
+        // Dim unmatched nodes when search is active
+        const matched = !searchTerm || n.name.toLowerCase().includes(searchTerm);
+        opacities.push(matched ? 0.88 : 0.12);
+
+        const commLabel = n.community_title ? `<br><b>Community:</b> ${n.community_title}` : '';
+        hovers.push(
+          `<b>${n.name}</b><br>` +
+          `Type/Comm: ${label}<br>` +
+          `<b>Degree:</b> ${n.degree} · <b>Freq:</b> ${n.frequency}` +
+          commLabel +
+          (n.description ? `<br><br><i>${n.description.slice(0, 180)}…</i>` : '')
+        );
+      });
+
+      return {
+        type: 'scatter',
+        mode: showLabels ? 'markers+text' : 'markers',
+        x: xs,
+        y: ys,
+        text: texts,
+        textposition: 'top center',
+        textfont: { size: 9, color: 'rgba(203,213,225,0.85)' },
+        name: label,
+        hovertext: hovers,
+        hoverinfo: 'text',
+        marker: {
+          color: color,
+          size: sizes,
+          opacity: opacities,
+          line: { color: 'rgba(255,255,255,0.15)', width: 1 },
+        },
+      };
+    }
+
+    function showUmapDetail(node) {
+      const panel = document.getElementById('umapDetail');
+      const color = TYPE_COLORS[node.type] || FALLBACK_COLOR;
+      document.getElementById('udType').innerHTML =
+        `<span style="color: ${color}; text-transform: uppercase; font-weight: 700; font-size: 0.75rem; letter-spacing: 0.5px;">${node.type || '—'}</span>`;
+      document.getElementById('udName').textContent = node.name;
+      document.getElementById('udMeta').textContent =
+        `Degree ${node.degree}  ·  Frequency ${node.frequency}`;
+      document.getElementById('udDesc').textContent = node.description || '—';
+      document.getElementById('udComm').textContent =
+        node.community_title ? `Community: ${node.community_title}` : '';
+      panel.classList.remove('hidden');
+    }
+
+    function triggerResize() {
+      const el = document.getElementById('umapChart');
+      if (el && umapChart) Plotly.relayout(el, { autosize: true });
+    }
+  </script>
 </body>
+
 </html>
