@@ -31,6 +31,15 @@ source graphrag-env/bin/activate
 python3 import_neo4j.py
 ```
 
+If your Neo4j instance uses a different port or password, override the defaults via environment variables:
+
+```bash
+NEO4J_URI=bolt://localhost:7687 \
+NEO4J_USER=neo4j \
+NEO4J_PASSWORD=password \
+python3 import_neo4j.py
+```
+
 The importer clears all existing data before loading. Run it after every `python -m graphrag index` to keep Neo4j in sync with the Parquet outputs.
 
 ---
@@ -106,11 +115,15 @@ human_readable_id int
 ```
 id               string (UUID)
 community        int             (community number — used for hierarchy joins)
-level            int             (0 = finest, higher = broader)
+level            int             (0 = broadest/root split, higher = finer sub-communities)
 title            string
 size             int
 period           string
 parent           int             (-1 = root community)
+children         list[int]       (child community numbers)
+is_root          bool            (true when parent = -1)
+is_final         bool            (true when this community was not split further)
+hierarchy_role   string          (root / intermediate / final / root_final)
 human_readable_id int
 ```
 
@@ -120,11 +133,17 @@ human_readable_id int
 
 ```
 id               string (UUID)
+community        int
+level            int
+parent           int
+children         list[int]
+is_root          bool
+is_final         bool
+hierarchy_role   string
 title            string
 summary          string
 full_content     string
 full_content_json string         (JSON-serialised findings)
-level            int
 rank             float           (0–10 importance score)
 rating_explanation string
 findings         string          (JSON-serialised list)
@@ -144,10 +163,12 @@ human_readable_id int
 (Claim)           -[:EXTRACTED_FROM]-> (TextUnit)
 (Claim)           -[:ABOUT_SUBJECT]->  (Entity)
 (Claim)           -[:ABOUT_OBJECT]->   (Entity)
-(Entity)          -[:BELONGS_TO]->     (Community)
-(Community)       -[:PARENT_OF]->      (Community)
-(CommunityReport) -[:DESCRIBES]->      (Community)
+(Entity)          -[:BELONGS_TO]->     (Community)       + level, is_final, hierarchy_role
+(Community)       -[:PARENT_OF]->      (Community)       + parent_level, child_level
+(CommunityReport) -[:DESCRIBES]->      (Community)       + level, is_final, hierarchy_role
 ```
+
+`BELONGS_TO` edges are imported from `communities.parquet` exactly as GraphRAG emits them, so an entity can have one membership per hierarchy level. Use `is_final = true` to get the deepest community GraphRAG assigned to that entity. In current GraphRAG outputs, `level = 0` is the broadest/root partition and higher levels are recursive refinements.
 
 ### `RELATED` edge properties
 
@@ -193,7 +214,11 @@ CREATE INDEX text_unit_id        IF NOT EXISTS FOR (n:TextUnit)        ON (n.id)
 CREATE INDEX claim_id            IF NOT EXISTS FOR (n:Claim)           ON (n.id)
 CREATE INDEX community_id        IF NOT EXISTS FOR (n:Community)       ON (n.id)
 CREATE INDEX community_num       IF NOT EXISTS FOR (n:Community)       ON (n.community)
+CREATE INDEX community_level     IF NOT EXISTS FOR (n:Community)       ON (n.level)
+CREATE INDEX community_parent    IF NOT EXISTS FOR (n:Community)       ON (n.parent)
 CREATE INDEX community_report_id IF NOT EXISTS FOR (n:CommunityReport) ON (n.id)
+CREATE INDEX community_report_community IF NOT EXISTS FOR (n:CommunityReport) ON (n.community)
+CREATE INDEX community_report_level     IF NOT EXISTS FOR (n:CommunityReport) ON (n.level)
 ```
 
 These indexes are created automatically by `import_neo4j.py` before each import run.
@@ -286,13 +311,18 @@ LIMIT 10
 
 ```cypher
 // Community hierarchy (full tree)
-MATCH p = (root:Community)-[:PARENT_OF*]->(child:Community)
+MATCH p = (root:Community {is_root: true})-[:PARENT_OF*]->(child:Community)
 RETURN p
 
-// Communities at a specific level
+// Broad/root communities (GraphRAG level 0)
 MATCH (c:Community {level: 0})
 RETURN c.community, c.title, c.size
 ORDER BY c.size DESC
+
+// Final communities only (deepest split reached per branch)
+MATCH (c:Community {is_final: true})
+RETURN c.community, c.level, c.title, c.size
+ORDER BY c.level DESC, c.size DESC
 
 // Top-ranked community reports
 MATCH (cr:CommunityReport)
@@ -301,15 +331,19 @@ ORDER BY cr.rank DESC
 LIMIT 10
 
 // Entities in a community with its report
-MATCH (e:Entity)-[:BELONGS_TO]->(c:Community)<-[:DESCRIBES]-(cr:CommunityReport)
-RETURN c.title, cr.rank, collect(e.name) AS members
+MATCH (e:Entity)-[r:BELONGS_TO]->(c:Community)<-[:DESCRIBES]-(cr:CommunityReport)
+RETURN c.level, c.title, cr.rank, collect(e.name) AS members
 ORDER BY cr.rank DESC
 LIMIT 10
 
-// Which community does a given entity belong to?
-MATCH (e:Entity {name: 'ACME CORP'})-[:BELONGS_TO]->(c:Community)<-[:DESCRIBES]-(cr:CommunityReport)
-RETURN c.level, c.title, cr.summary
+// Which communities does a given entity belong to across the hierarchy?
+MATCH (e:Entity {name: 'ACME CORP'})-[r:BELONGS_TO]->(c:Community)<-[:DESCRIBES]-(cr:CommunityReport)
+RETURN c.level, c.hierarchy_role, c.title, r.is_final, cr.summary
 ORDER BY c.level ASC
+
+// Deepest community for an entity
+MATCH (e:Entity {name: 'ACME CORP'})-[r:BELONGS_TO {is_final: true}]->(c:Community)
+RETURN c.level, c.title, c.community
 ```
 
 ---

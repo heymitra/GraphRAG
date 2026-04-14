@@ -166,8 +166,8 @@
           </div>
           <div class="umap-ctrl-group" id="commLevelGroup">
             <span class="umap-ctrl-label" title="L0 = broadest (all entities); L1 = sub-communities; L2 = deepest but partial coverage">Granularity</span>
-            <button class="umap-mode-btn" data-level="0" id="commLvl0" title="Broad: 14 root communities, covers all entities">Broad</button>
-            <button class="umap-mode-btn active" data-level="1" id="commLvl1" title="Detailed: 51 sub-communities, covers ~97% of entities">Detailed</button>
+            <button class="umap-mode-btn active" data-level="0" id="commLvl0" title="Broad: 14 root communities, covers all entities">Broad</button>
+            <button class="umap-mode-btn" data-level="1" id="commLvl1" title="Detailed: 51 sub-communities, covers ~97% of entities">Detailed</button>
             <button class="umap-mode-btn" data-level="2" id="commLvl2" title="Fine: deepest split, 21 leaf communities covering ~32% of entities; others fall back to Detailed level">Fine</button>
           </div>
           <div class="umap-ctrl-group">
@@ -757,7 +757,7 @@
     let umapNodes = [];
     let umapEdges = [];
     let umapColorMode = 'community';   // 'type' | 'community'
-    let umapCommLevel = 1;             // active community hierarchy level (1=Detailed is most complete)
+    let umapCommLevel = 0;             // active community hierarchy level (0=Broad by default)
     let umapChart = null;
 
     // Helpers: pick community fields for the currently selected level

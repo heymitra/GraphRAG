@@ -105,7 +105,7 @@ One row per community at every hierarchy level.
 |--------|------|-------------|
 | `id` | UUID string | Primary key |
 | `community` | int | Community number (used for hierarchy joins) |
-| `level` | int | `0` = finest / most local; higher = broader parent |
+| `level` | int | `0` = broadest/root split; higher = finer child communities created by recursive splitting |
 | `title` | string | Community label |
 | `size` | int | Number of member entities |
 | `period` | string | Temporal scope if inferred from content |

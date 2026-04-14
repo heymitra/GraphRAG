@@ -1,13 +1,15 @@
 import json
+import os
 import pandas as pd
 from neo4j import GraphDatabase
 import sys
 
 # --- CONFIGURATION ---
-NEO4J_URI = "bolt://localhost:7688"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "graphrag123"
-OUTPUT_DIR = "output"
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7688")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "graphrag123")
+NEO4J_BROWSER_URL = os.getenv("NEO4J_BROWSER_URL", "http://localhost:7475")
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 
 # --- HELPERS ---
 
@@ -37,6 +39,46 @@ def _clean(val, default=None):
     except Exception:
         pass
     return val
+
+def _safe_int(val, default=None):
+    """Best-effort integer coercion for parquet scalar values."""
+    val = _clean(val, default)
+    if val is None:
+        return default
+    if hasattr(val, 'item'):
+        try:
+            val = val.item()
+        except Exception:
+            pass
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        try:
+            return int(float(val))
+        except (TypeError, ValueError):
+            return default
+
+def _to_int_list(val):
+    """Normalise a value to a sorted list of unique ints."""
+    out = []
+    seen = set()
+    for item in _to_list(val):
+        item_int = _safe_int(item)
+        if item_int is None or item_int in seen:
+            continue
+        seen.add(item_int)
+        out.append(item_int)
+    return sorted(out)
+
+def _community_role(parent, children):
+    """Classify a community node inside the GraphRAG hierarchy."""
+    if parent == -1 and not children:
+        return 'root_final'
+    if parent == -1:
+        return 'root'
+    if not children:
+        return 'final'
+    return 'intermediate'
 
 def _records(df):
     """Convert a DataFrame to a list of plain-Python dicts (no numpy scalars)."""
@@ -74,6 +116,10 @@ def create_indexes(session):
         "CREATE INDEX community_id IF NOT EXISTS FOR (n:Community) ON (n.id)",
         "CREATE INDEX community_num IF NOT EXISTS FOR (n:Community) ON (n.community)",
         "CREATE INDEX community_report_id IF NOT EXISTS FOR (n:CommunityReport) ON (n.id)",
+        "CREATE INDEX community_level IF NOT EXISTS FOR (n:Community) ON (n.level)",
+        "CREATE INDEX community_parent IF NOT EXISTS FOR (n:Community) ON (n.parent)",
+        "CREATE INDEX community_report_community IF NOT EXISTS FOR (n:CommunityReport) ON (n.community)",
+        "CREATE INDEX community_report_level IF NOT EXISTS FOR (n:CommunityReport) ON (n.level)",
     ]
     for idx in indexes:
         session.run(idx)
@@ -162,6 +208,10 @@ def create_communities(tx, batch):
         c.size        = row.size,
         c.period      = row.period,
         c.parent      = row.parent,
+        c.children    = row.children,
+        c.is_root     = row.is_root,
+        c.is_final    = row.is_final,
+        c.hierarchy_role = row.hierarchy_role,
         c.human_readable_id = row.human_readable_id
     """
     tx.run(query, batch=batch)
@@ -170,11 +220,17 @@ def create_community_reports(tx, batch):
     query = """
     UNWIND $batch AS row
     MERGE (cr:CommunityReport {id: row.id})
-    SET cr.title               = row.title,
+    SET cr.community           = row.community,
+        cr.level               = row.level,
+        cr.parent              = row.parent,
+        cr.children            = row.children,
+        cr.is_root             = row.is_root,
+        cr.is_final            = row.is_final,
+        cr.hierarchy_role      = row.hierarchy_role,
+        cr.title               = row.title,
         cr.summary             = row.summary,
         cr.full_content        = row.full_content,
         cr.full_content_json   = row.full_content_json,
-        cr.level               = row.level,
         cr.rank                = row.rank,
         cr.rating_explanation  = row.rating_explanation,
         cr.findings            = row.findings,
@@ -247,7 +303,12 @@ def create_entity_community_edges(tx, communities_batch):
     MATCH (comm:Community {id: row.id})
     UNWIND row.entity_ids AS entity_id
     MATCH (e:Entity {id: entity_id})
-    MERGE (e)-[:BELONGS_TO]->(comm)
+    MERGE (e)-[r:BELONGS_TO]->(comm)
+    SET r.community      = row.community,
+        r.level          = row.level,
+        r.is_root        = row.is_root,
+        r.is_final       = row.is_final,
+        r.hierarchy_role = row.hierarchy_role
     """
     rows = [c for c in communities_batch if c.get('entity_ids')]
     if rows:
@@ -258,8 +319,13 @@ def create_community_hierarchy_edges(tx, communities_batch):
     query = """
     UNWIND $batch AS row
     MATCH (parent:Community {community: row.parent})
-    MATCH (child:Community  {community: row.community})
-    MERGE (parent)-[:PARENT_OF]->(child)
+    MATCH (child:Community  {community: row.community, level: row.level})
+    MERGE (parent)-[r:PARENT_OF]->(child)
+    SET r.parent       = row.parent,
+        r.child        = row.community,
+        r.parent_level = parent.level,
+        r.child_level  = child.level,
+        r.level_delta  = child.level - parent.level
     """
     # Only communities that have a real parent (parent != -1 and != None)
     rows = [c for c in communities_batch
@@ -272,8 +338,13 @@ def create_community_report_edges(tx, reports_batch):
     query = """
     UNWIND $batch AS row
     MATCH (cr:CommunityReport {id: row.id})
-    MATCH (c:Community {community: row.community})
-    MERGE (cr)-[:DESCRIBES]->(c)
+    MATCH (c:Community {community: row.community, level: row.level})
+    MERGE (cr)-[r:DESCRIBES]->(c)
+    SET r.community      = row.community,
+        r.level          = row.level,
+        r.is_root        = row.is_root,
+        r.is_final       = row.is_final,
+        r.hierarchy_role = row.hierarchy_role
     """
     tx.run(query, batch=reports_batch)
 
@@ -299,15 +370,18 @@ def _prep_communities(df):
     """Convert communities DataFrame to records with proper list fields."""
     rows = _records(df)
     for r in rows:
+        r['community']        = _safe_int(r.get('community'))
+        r['level']            = _safe_int(r.get('level'))
+        r['size']             = _safe_int(r.get('size'))
+        r['human_readable_id'] = _safe_int(r.get('human_readable_id'))
         r['entity_ids']       = _to_list(r.get('entity_ids'))
         r['relationship_ids'] = _to_list(r.get('relationship_ids'))
         r['text_unit_ids']    = _to_list(r.get('text_unit_ids'))
-        r['children']         = _to_list(r.get('children'))
-        # Keep parent as int; -1 means root
-        if r.get('parent') is None:
-            r['parent'] = -1
-        elif hasattr(r['parent'], 'item'):
-            r['parent'] = r['parent'].item()
+        r['children']         = _to_int_list(r.get('children'))
+        r['parent']           = _safe_int(r.get('parent'), -1)
+        r['is_root']          = r['parent'] == -1
+        r['is_final']         = len(r['children']) == 0
+        r['hierarchy_role']   = _community_role(r['parent'], r['children'])
     return rows
 
 def _prep_relationships(df):
@@ -321,6 +395,15 @@ def _prep_community_reports(df):
     """Serialise complex fields (findings, full_content_json) to JSON strings."""
     rows = _records(df)
     for r in rows:
+        r['community'] = _safe_int(r.get('community'))
+        r['level'] = _safe_int(r.get('level'))
+        r['parent'] = _safe_int(r.get('parent'), -1)
+        r['size'] = _safe_int(r.get('size'))
+        r['human_readable_id'] = _safe_int(r.get('human_readable_id'))
+        r['children'] = _to_int_list(r.get('children'))
+        r['is_root'] = r['parent'] == -1
+        r['is_final'] = len(r['children']) == 0
+        r['hierarchy_role'] = _community_role(r['parent'], r['children'])
         for field in ('findings', 'full_content_json'):
             val = r.get(field)
             if val is not None and not isinstance(val, str):
@@ -328,8 +411,123 @@ def _prep_community_reports(df):
                     r[field] = json.dumps(val, default=str)
                 except Exception:
                     r[field] = str(val)
-        r['children'] = _to_list(r.get('children'))
     return rows
+
+def validate_community_hierarchy(comm_records, report_records):
+    """Validate GraphRAG hierarchical Leiden invariants before importing."""
+    errors = []
+    communities_by_num = {}
+    membership_by_level = {}
+
+    for row in comm_records:
+        community = row.get('community')
+        level = row.get('level')
+        if community is None:
+            errors.append("Encountered a community row without a numeric 'community' value.")
+            continue
+        if level is None:
+            errors.append(f"Community {community} is missing 'level'.")
+            continue
+        if community in communities_by_num:
+            prev_level = communities_by_num[community].get('level')
+            errors.append(
+                f"Community number {community} appears multiple times (levels {prev_level} and {level})."
+            )
+            continue
+        communities_by_num[community] = row
+
+        for entity_id in row.get('entity_ids', []):
+            key = (level, entity_id)
+            previous = membership_by_level.get(key)
+            if previous is not None and previous != community:
+                errors.append(
+                    f"Entity {entity_id} belongs to multiple communities at level {level}: "
+                    f"{previous} and {community}."
+                )
+            membership_by_level[key] = community
+
+    for community, row in communities_by_num.items():
+        parent = row.get('parent', -1)
+        children = row.get('children', [])
+        if parent == community:
+            errors.append(f"Community {community} cannot be its own parent.")
+        if parent != -1:
+            parent_row = communities_by_num.get(parent)
+            if parent_row is None:
+                errors.append(f"Community {community} references missing parent {parent}.")
+            else:
+                if parent_row.get('level', -1) >= row.get('level', -1):
+                    errors.append(
+                        f"Community {community} (level {row.get('level')}) has parent {parent} "
+                        f"at non-coarser level {parent_row.get('level')}."
+                    )
+                child_entities = set(row.get('entity_ids', []))
+                parent_entities = set(parent_row.get('entity_ids', []))
+                if not child_entities.issubset(parent_entities):
+                    errors.append(
+                        f"Community {community} has entities not contained in parent {parent}."
+                    )
+
+        actual_children = sorted(
+            child_num
+            for child_num, child_row in communities_by_num.items()
+            if child_row.get('parent') == community
+        )
+        if children != actual_children:
+            errors.append(
+                f"Community {community} children mismatch: listed {children}, actual {actual_children}."
+            )
+
+    reports_by_num = {}
+    for row in report_records:
+        community = row.get('community')
+        if community is None:
+            errors.append("Encountered a community report row without a numeric 'community' value.")
+            continue
+        if community in reports_by_num:
+            errors.append(f"Multiple community reports reference community {community}.")
+            continue
+        reports_by_num[community] = row
+
+    missing_reports = sorted(set(communities_by_num) - set(reports_by_num))
+    extra_reports = sorted(set(reports_by_num) - set(communities_by_num))
+    if missing_reports:
+        errors.append(f"Missing community reports for communities: {missing_reports[:10]}.")
+    if extra_reports:
+        errors.append(f"Community reports reference unknown communities: {extra_reports[:10]}.")
+
+    for community, report in reports_by_num.items():
+        community_row = communities_by_num.get(community)
+        if community_row is None:
+            continue
+        for field in ('level', 'parent', 'children'):
+            if report.get(field) != community_row.get(field):
+                errors.append(
+                    f"Community report {community} disagrees with community row on '{field}': "
+                    f"{report.get(field)} vs {community_row.get(field)}."
+                )
+
+    if errors:
+        details = "\n".join(f"  - {msg}" for msg in errors[:20])
+        if len(errors) > 20:
+            details += f"\n  - ... {len(errors) - 20} more"
+        raise ValueError(f"Community hierarchy validation failed:\n{details}")
+
+    level_counts = {}
+    entity_coverage = {}
+    for row in comm_records:
+        level = row['level']
+        level_counts[level] = level_counts.get(level, 0) + 1
+        entity_coverage.setdefault(level, set()).update(row.get('entity_ids', []))
+
+    root_count = sum(1 for row in comm_records if row.get('is_root'))
+    final_count = sum(1 for row in comm_records if row.get('is_final'))
+    coverage_counts = {level: len(entity_coverage[level]) for level in sorted(entity_coverage)}
+
+    print("✅ Community hierarchy validated")
+    print(f"   Levels: {dict(sorted(level_counts.items()))}")
+    print(f"   Entity coverage by level: {coverage_counts}")
+    print(f"   Root communities: {root_count} | Final communities: {final_count}")
 
 def print_progress(current, total, operation):
     percent = (current / total) * 100
@@ -377,6 +575,9 @@ def main():
     claim_records   = _records(claims_df)
     comm_records    = _prep_communities(communities_df)
     report_records  = _prep_community_reports(community_reports_df)
+
+    print("\n🧭 Validating GraphRAG community hierarchy...")
+    validate_community_hierarchy(comm_records, report_records)
 
     driver = create_driver()
     try:
@@ -466,17 +667,18 @@ def main():
         driver.close()
 
     print("\n🎉 Import completed successfully!")
-    print("🌐 Open Neo4j Browser at http://localhost:7474")
+    print(f"🌐 Open Neo4j Browser at {NEO4J_BROWSER_URL}")
     print("\n💡 Example Cypher queries:")
     print("   MATCH (n) RETURN labels(n) AS NodeType, count(n) AS Count ORDER BY Count DESC")
     print("   MATCH (e:Entity)-[r:RELATED]->(e2:Entity) RETURN e.name, r.description, e2.name LIMIT 25")
     print("   MATCH (c:Claim)-[:ABOUT_SUBJECT]->(e:Entity) RETURN e.name, c.type, c.description LIMIT 10")
-    print("   MATCH (e:Entity)-[:BELONGS_TO]->(comm:Community)<-[:DESCRIBES]-(cr:CommunityReport)")
-    print("         RETURN e.name, comm.title, cr.summary LIMIT 10")
-    print("   MATCH p=(root:Community)-[:PARENT_OF*]->(child:Community) RETURN p")
+    print("   MATCH (e:Entity)-[r:BELONGS_TO]->(comm:Community)<-[:DESCRIBES]-(cr:CommunityReport)")
+    print("         RETURN e.name, r.level, comm.title, cr.summary LIMIT 10")
+    print("   MATCH p=(root:Community {is_root: true})-[:PARENT_OF*]->(child:Community) RETURN p")
     print(f"   • Entity mentions: MATCH (e:Entity)-[:MENTIONED_IN]->(t:TextUnit) RETURN e, t LIMIT 10")
     print(f"   • Claims about entities: MATCH (c:Claim)-[:ABOUT_SUBJECT]->(e:Entity) RETURN c, e LIMIT 10")
-    print(f"   • Community structure: MATCH (e:Entity)-[:BELONGS_TO]->(c:Community)<-[:DESCRIBES]-(cr:CommunityReport) RETURN e, c, cr LIMIT 10")
+    print("   • Final community membership: MATCH (e:Entity)-[:BELONGS_TO {is_final: true}]->(c:Community) RETURN e, c LIMIT 10")
+    print(f"   • Community structure: MATCH (e:Entity)-[r:BELONGS_TO]->(c:Community)<-[:DESCRIBES]-(cr:CommunityReport) RETURN e, r, c, cr LIMIT 10")
     print(f"   • Find most connected entities: MATCH (e:Entity) RETURN e.name, e.degree ORDER BY e.degree DESC LIMIT 10")
 
 if __name__ == "__main__":

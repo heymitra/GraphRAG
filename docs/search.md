@@ -125,7 +125,7 @@ All key-points from all map shards are merged, ranked by score, and sent to the 
 
 ### Community level selection
 
-The `level` parameter controls which community reports are included. Lower levels provide more fine-grained detail; higher levels provide broader overviews. The default is typically the highest available level for broad questions.
+The `level` parameter controls which community reports are included. In current GraphRAG, lower levels are broader and higher levels are more fine-grained. The CLI default is `--community-level 2`, and the query layer includes reports up to that level (`level <= community_level`) so you can cap the maximum refinement depth.
 
 ### When to use global search
 

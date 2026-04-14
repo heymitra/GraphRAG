@@ -79,8 +79,8 @@ Entities and their connections are extracted and stored explicitly. The LLM does
 ### 2. Community hierarchy enables multi-scale reasoning
 
 Leiden clustering groups related entities at multiple levels of granularity:
-- Fine-grained communities (level 0) represent tight local clusters, e.g. a company and its immediate leadership.
-- Coarser parent communities (levels 1, 2, …) represent broader ecosystems, e.g. an entire industry.
+- Root communities (level 0) represent the broadest first split of the graph.
+- Higher levels (1, 2, …) recursively refine oversized communities into smaller, more specific sub-communities.
 
 This hierarchy lets search navigate from broad overview to specific detail, or operate at the right granularity for a given question.
 

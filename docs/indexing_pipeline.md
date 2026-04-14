@@ -260,12 +260,12 @@ Examples of natural communities:
 
 The Leiden algorithm produces a **recursive hierarchy** of communities:
 
-- `level = 0` — finest granularity; small, tightly connected local clusters
-- `level = 1` — parent clusters that group level-0 communities
-- `level = 2` — broader still
-- Higher levels — increasingly coarse-grained, corpus-level views
+- `level = 0` — initial/root partition of the full graph; broadest communities
+- `level = 1` — child communities formed by recursively splitting oversized level-0 communities
+- `level = 2` — deeper refinements of level-1 communities
+- Higher levels — increasingly fine-grained sub-communities
 
-This hierarchy supports reasoning at different scales: drill into a level-0 community for detail, or examine a level-2 community for an overview of an entire domain.
+This hierarchy supports reasoning at different scales: examine a level-0 community for a broad overview, or drill into higher levels for more detail. Not every entity appears at every deeper level; entities stop at the deepest final community GraphRAG creates for them.
 
 ### `max_cluster_size`
 
