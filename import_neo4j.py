@@ -209,6 +209,8 @@ def create_communities(tx, batch):
         c.period      = row.period,
         c.parent      = row.parent,
         c.children    = row.children,
+        c.relationship_ids = row.relationship_ids,
+        c.text_unit_ids = row.text_unit_ids,
         c.is_root     = row.is_root,
         c.is_final    = row.is_final,
         c.hierarchy_role = row.hierarchy_role,
@@ -330,6 +332,24 @@ def create_community_hierarchy_edges(tx, communities_batch):
     # Only communities that have a real parent (parent != -1 and != None)
     rows = [c for c in communities_batch
             if c.get('parent') is not None and c['parent'] != -1 and c['parent'] != '']
+    if rows:
+        tx.run(query, batch=rows)
+
+def create_community_text_unit_edges(tx, communities_batch):
+    """Community -[:SUPPORTED_BY]-> TextUnit"""
+    query = """
+    UNWIND $batch AS row
+    MATCH (comm:Community {id: row.id})
+    UNWIND row.text_unit_ids AS text_unit_id
+    MATCH (t:TextUnit {id: text_unit_id})
+    MERGE (comm)-[r:SUPPORTED_BY]->(t)
+    SET r.community      = row.community,
+        r.level          = row.level,
+        r.is_root        = row.is_root,
+        r.is_final       = row.is_final,
+        r.hierarchy_role = row.hierarchy_role
+    """
+    rows = [c for c in communities_batch if c.get('text_unit_ids')]
     if rows:
         tx.run(query, batch=rows)
 
@@ -640,6 +660,10 @@ def main():
             session.execute_write(create_community_hierarchy_edges, comm_records)
             print("   ✅ Community -[:PARENT_OF]-> Community")
 
+            # Community -[:SUPPORTED_BY]-> TextUnit
+            session.execute_write(create_community_text_unit_edges, comm_records)
+            print("   ✅ Community -[:SUPPORTED_BY]-> TextUnit")
+
             # CommunityReport -[:DESCRIBES]-> Community
             session.execute_write(create_community_report_edges, report_records)
             print("   ✅ CommunityReport -[:DESCRIBES]-> Community")
@@ -678,6 +702,7 @@ def main():
     print(f"   • Entity mentions: MATCH (e:Entity)-[:MENTIONED_IN]->(t:TextUnit) RETURN e, t LIMIT 10")
     print(f"   • Claims about entities: MATCH (c:Claim)-[:ABOUT_SUBJECT]->(e:Entity) RETURN c, e LIMIT 10")
     print("   • Final community membership: MATCH (e:Entity)-[:BELONGS_TO {is_final: true}]->(c:Community) RETURN e, c LIMIT 10")
+    print("   • Community evidence: MATCH (c:Community)-[:SUPPORTED_BY]->(t:TextUnit) RETURN c.title, t.text LIMIT 10")
     print(f"   • Community structure: MATCH (e:Entity)-[r:BELONGS_TO]->(c:Community)<-[:DESCRIBES]-(cr:CommunityReport) RETURN e, r, c, cr LIMIT 10")
     print(f"   • Find most connected entities: MATCH (e:Entity) RETURN e.name, e.degree ORDER BY e.degree DESC LIMIT 10")
 

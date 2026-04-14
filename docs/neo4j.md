@@ -121,6 +121,8 @@ size             int
 period           string
 parent           int             (-1 = root community)
 children         list[int]       (child community numbers)
+relationship_ids list[string]    (internal relationship IDs)
+text_unit_ids    list[string]    (supporting chunk IDs)
 is_root          bool            (true when parent = -1)
 is_final         bool            (true when this community was not split further)
 hierarchy_role   string          (root / intermediate / final / root_final)
@@ -165,10 +167,13 @@ human_readable_id int
 (Claim)           -[:ABOUT_OBJECT]->   (Entity)
 (Entity)          -[:BELONGS_TO]->     (Community)       + level, is_final, hierarchy_role
 (Community)       -[:PARENT_OF]->      (Community)       + parent_level, child_level
+(Community)       -[:SUPPORTED_BY]->   (TextUnit)        + level, is_final, hierarchy_role
 (CommunityReport) -[:DESCRIBES]->      (Community)       + level, is_final, hierarchy_role
 ```
 
 `BELONGS_TO` edges are imported from `communities.parquet` exactly as GraphRAG emits them, so an entity can have one membership per hierarchy level. Use `is_final = true` to get the deepest community GraphRAG assigned to that entity. In current GraphRAG outputs, `level = 0` is the broadest/root partition and higher levels are recursive refinements.
+
+`SUPPORTED_BY` edges come from `communities.text_unit_ids`. Those chunk IDs are not used by Leiden itself. GraphRAG first clusters the entity relationship graph, then projects each community back onto the intra-community relationships at that level and unions the `text_unit_ids` that evidence those relationships.
 
 ### `RELATED` edge properties
 
@@ -323,6 +328,11 @@ ORDER BY c.size DESC
 MATCH (c:Community {is_final: true})
 RETURN c.community, c.level, c.title, c.size
 ORDER BY c.level DESC, c.size DESC
+
+// Text evidence for a community
+MATCH (c:Community)-[:SUPPORTED_BY]->(t:TextUnit)
+RETURN c.level, c.title, t.human_readable_id, left(t.text, 200)
+LIMIT 10
 
 // Top-ranked community reports
 MATCH (cr:CommunityReport)

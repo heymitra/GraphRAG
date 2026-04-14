@@ -128,7 +128,7 @@ EOF
 | `TextUnit` | `id`, `text`, `n_tokens` |
 | `Entity` | `id`, `name`, `type`, `description`, `degree`, `x`, `y` |
 | `Claim` | `id`, `covariate_type`, `type`, `description`, `status`, `subject_id`, `object_id` |
-| `Community` | `id`, `community`, `level`, `title`, `size`, `period`, `parent`, `children`, `is_root`, `is_final` |
+| `Community` | `id`, `community`, `level`, `title`, `size`, `period`, `parent`, `children`, `relationship_ids`, `text_unit_ids`, `is_root`, `is_final` |
 | `CommunityReport` | `id`, `community`, `level`, `parent`, `children`, `title`, `summary`, `full_content`, `findings`, `rank`, `is_root`, `is_final` |
 
 ### Edges
@@ -143,6 +143,7 @@ EOF
 | `ABOUT_OBJECT` | `Claim` → `Entity` | `covariates.object_id` |
 | `BELONGS_TO` | `Entity` → `Community` | `communities.entity_ids` (one explicit membership per GraphRAG level; edge stores `level` and `is_final`) |
 | `PARENT_OF` | `Community` → `Community` | `communities.parent` |
+| `SUPPORTED_BY` | `Community` → `TextUnit` | `communities.text_unit_ids` |
 | `DESCRIBES` | `CommunityReport` → `Community` | `community_reports.community` (edge stores `level` and `is_final`) |
 
 ## Cypher Query Examples
