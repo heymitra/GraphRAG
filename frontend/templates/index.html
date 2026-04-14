@@ -164,6 +164,12 @@
             <button class="umap-mode-btn" id="colorByType">Entity Type</button>
             <button class="umap-mode-btn active" id="colorByCommunity">Community</button>
           </div>
+          <div class="umap-ctrl-group" id="commLevelGroup">
+            <span class="umap-ctrl-label" title="L0 = broadest (all entities); L1 = sub-communities; L2 = deepest but partial coverage">Granularity</span>
+            <button class="umap-mode-btn" data-level="0" id="commLvl0" title="Broad: 14 root communities, covers all entities">Broad</button>
+            <button class="umap-mode-btn active" data-level="1" id="commLvl1" title="Detailed: 51 sub-communities, covers ~97% of entities">Detailed</button>
+            <button class="umap-mode-btn" data-level="2" id="commLvl2" title="Fine: deepest split, 21 leaf communities covering ~32% of entities; others fall back to Detailed level">Fine</button>
+          </div>
           <div class="umap-ctrl-group">
             <label class="umap-toggle">
               <input type="checkbox" id="showEdges" checked />
@@ -751,7 +757,12 @@
     let umapNodes = [];
     let umapEdges = [];
     let umapColorMode = 'community';   // 'type' | 'community'
+    let umapCommLevel = 1;             // active community hierarchy level (1=Detailed is most complete)
     let umapChart = null;
+
+    // Helpers: pick community fields for the currently selected level
+    function nodeComm(n)      { return n[`community_l${umapCommLevel}`] ?? null; }
+    function nodeCommTitle(n) { return n[`community_title_l${umapCommLevel}`] || ''; }
 
     document.getElementById('colorByType').addEventListener('click', () => setColorMode('type'));
     document.getElementById('colorByCommunity').addEventListener('click', () => setColorMode('community'));
@@ -792,6 +803,21 @@
         umapNodes = data.nodes;
         umapEdges = data.edges;
 
+        // Annotate level buttons with unique community counts
+        const levelLabels = { 0: 'Broad', 1: 'Detailed', 2: 'Fine' };
+        const levelDesc   = {
+          0: 'root communities — broadest grouping, covers all entities',
+          1: 'sub-communities within each root — best balance of detail and coverage',
+          2: 'deepest split — finest granularity; entities with no L2 community fall back to Detailed level',
+        };
+        (data.comm_levels || []).forEach(L => {
+          const btn = document.getElementById(`commLvl${L}`);
+          if (!btn) return;
+          const unique = new Set(umapNodes.map(n => n[`community_l${L}`]).filter(v => v != null)).size;
+          btn.textContent = `${levelLabels[L] || `L${L}`} · ${unique}`;
+          btn.title = `${unique} ${levelDesc[L] || 'communities'}`;
+        });
+
         // Set slider max to 95th-percentile degree
         const degrees = umapNodes.map(n => n.degree).sort((a, b) => a - b);
         const p95 = degrees[Math.floor(degrees.length * 0.95)] || 20;
@@ -814,8 +840,22 @@
       umapColorMode = mode;
       document.getElementById('colorByType').classList.toggle('active', mode === 'type');
       document.getElementById('colorByCommunity').classList.toggle('active', mode === 'community');
+      document.getElementById('commLevelGroup').style.display = mode === 'community' ? '' : 'none';
       renderUmap();
     }
+
+    function setCommLevel(level) {
+      umapCommLevel = level;
+      [0, 1, 2].forEach(L => {
+        const btn = document.getElementById(`commLvl${L}`);
+        if (btn) btn.classList.toggle('active', L === level);
+      });
+      renderUmap();
+    }
+
+    document.getElementById('commLvl0').addEventListener('click', () => setCommLevel(0));
+    document.getElementById('commLvl1').addEventListener('click', () => setCommLevel(1));
+    document.getElementById('commLvl2').addEventListener('click', () => setCommLevel(2));
 
     function renderUmap() {
       const minDeg = parseInt(document.getElementById('minDegree').value, 10) || 0;
@@ -870,20 +910,20 @@
 
       } else {
         // Color by community
-        const comms = [...new Set(visible.map(n => n.community))].sort((a, b) => (a ?? 999) - (b ?? 999));
+        const comms = [...new Set(visible.map(n => nodeComm(n)))].sort((a, b) => (a ?? 999) - (b ?? 999));
         const commColorMap = {};
         comms.forEach((c, i) => { commColorMap[c] = COMM_PALETTE[i % COMM_PALETTE.length]; });
 
         const byComm = {};
         visible.forEach(n => {
-          const k = n.community ?? 'none';
+          const k = nodeComm(n) ?? 'none';
           if (!byComm[k]) byComm[k] = [];
           byComm[k].push(n);
         });
 
         Object.entries(byComm).sort().forEach(([comm, nodes]) => {
           const color = commColorMap[comm === 'none' ? null : parseInt(comm)] || FALLBACK_COLOR;
-          const label = nodes[0]?.community_title || `Community ${comm}`;
+          const label = nodeCommTitle(nodes[0]) || `Community ${comm}`;
           nodeTraces.push(makeNodeTrace(nodes, label, color, searchTerm, showLabels));
         });
       }
@@ -963,7 +1003,7 @@
         const matched = !searchTerm || n.name.toLowerCase().includes(searchTerm);
         opacities.push(matched ? 0.88 : 0.12);
 
-        const commLabel = n.community_title ? `<br><b>Community:</b> ${n.community_title}` : '';
+        const commLabel = nodeCommTitle(n) ? `<br><b>Community:</b> ${nodeCommTitle(n)}` : '';
         hovers.push(
           `<b>${n.name}</b><br>` +
           `Type/Comm: ${label}<br>` +
@@ -1003,7 +1043,7 @@
         `Degree ${node.degree}  ·  Frequency ${node.frequency}`;
       document.getElementById('udDesc').textContent = node.description || '—';
       document.getElementById('udComm').textContent =
-        node.community_title ? `Community: ${node.community_title}` : '';
+        nodeCommTitle(node) ? `Community: ${nodeCommTitle(node)}` : '';
       panel.classList.remove('hidden');
     }
 

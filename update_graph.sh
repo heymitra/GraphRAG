@@ -12,7 +12,7 @@ rm -rf cache/
 # Activate virtual environment and run indexing
 echo "📊 Re-indexing with GraphRAG..."
 source graphrag-env/bin/activate
-graphrag index
+python -m graphrag index
 
 if [ $? -eq 0 ]; then
     echo "✅ GraphRAG indexing completed"

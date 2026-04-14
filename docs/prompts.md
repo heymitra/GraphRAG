@@ -215,7 +215,7 @@ Answers questions from retrieved text chunks with no graph context. Equivalent t
 
 ### `question_gen_system_prompt.txt` — Question Generation
 
-Used by `graphrag query --method question_gen`. Auto-generates candidate questions that the knowledge graph can answer. Useful for exploring corpus coverage.
+Used by `python -m graphrag query --method question_gen`. Auto-generates candidate questions that the knowledge graph can answer. Useful for exploring corpus coverage.
 
 ---
 

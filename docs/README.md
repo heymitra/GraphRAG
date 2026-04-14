@@ -31,17 +31,17 @@ Technical documentation for the Microsoft GraphRAG pipeline in this repository, 
 ```bash
 source graphrag-env/bin/activate
 rm -rf cache/
-graphrag index
+python3 -m graphrag index
 python3 import_neo4j.py
 ```
 
 ### Query
 
 ```bash
-graphrag query --method local  --query "Who is X?"
-graphrag query --method global --query "What are the main themes?"
-graphrag query --method drift  --query "Analyse the relationship between X and Y"
-graphrag query --method basic  --query "Find documents about Z"
+python3 -m graphrag query --method local  --query "Who is X?"
+python3 -m graphrag query --method global --query "What are the main themes?"
+python3 -m graphrag query --method drift  --query "Analyse the relationship between X and Y"
+python3 -m graphrag query --method basic  --query "Find documents about Z"
 ```
 
 ---

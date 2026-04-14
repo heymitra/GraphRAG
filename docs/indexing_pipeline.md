@@ -1,6 +1,6 @@
 # Indexing Pipeline
 
-The pipeline is triggered with `graphrag index` (or via `update_graph.sh`). Each step reads from earlier artifacts and writes new ones to `output/`.
+The pipeline is triggered with `python -m graphrag index` (or via `update_graph.sh`). Each step reads from earlier artifacts and writes new ones to `output/`.
 
 ## Overview
 

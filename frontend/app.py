@@ -18,10 +18,24 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 UPLOAD_FOLDER = os.path.join(PROJECT_ROOT, 'frontend', 'uploads')
 INPUT_FOLDER  = os.path.join(PROJECT_ROOT, 'input')
 OUTPUT_FOLDER = os.path.join(PROJECT_ROOT, 'output')
-GRAPHRAG_BIN  = os.path.join(PROJECT_ROOT, 'graphrag-env', 'bin', 'graphrag')
-PYTHON_BIN    = os.path.join(PROJECT_ROOT, 'graphrag-env', 'bin', 'python')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(INPUT_FOLDER,  exist_ok=True)
+
+def _resolve_python_bin():
+    """Prefer the project venv, but fall back to the current interpreter."""
+    candidates = [
+        os.path.join(PROJECT_ROOT, 'graphrag-env', 'bin', 'python'),
+        sys.executable,
+        shutil.which('python3'),
+        shutil.which('python'),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    raise RuntimeError("Unable to locate a Python interpreter for GraphRAG.")
+
+PYTHON_BIN = _resolve_python_bin()
+GRAPHRAG_CMD = [PYTHON_BIN, '-m', 'graphrag']
 
 # ── Neo4j (used only for write/admin operations) ──────────────────────────────
 NEO4J_URI      = "bolt://localhost:7688"
@@ -118,7 +132,7 @@ def run_full_pipeline(pdf_path, stem):
 
         # 3 ─ Run graphrag index ───────────────────────────────────────────────
         _set_stage("Running GraphRAG indexing (this may take several minutes…)")
-        ok = _run_step([GRAPHRAG_BIN, 'index', '--root', PROJECT_ROOT])
+        ok = _run_step(GRAPHRAG_CMD + ['index', '--root', PROJECT_ROOT])
         if not ok:
             raise RuntimeError("graphrag index failed – check the log above.")
 
@@ -413,16 +427,41 @@ def api_umap():
     if ents_df.empty:
         return jsonify({'error': 'No pipeline output found', 'nodes': [], 'edges': []}), 404
 
-    # ── Community membership: entity_id → finest-level community ─────────────
-    entity_community = {}
+    # ── Community membership: entity_id × level → (comm_num, ai_title) ─────────
+    # Build AI title lookup from community_reports (same titles as Communities tab).
+    crs_df = _parquet('community_reports.parquet')
+    comm_to_ai_title = {}
+    for _, row in crs_df.iterrows():
+        try:
+            num = int(float(row['community']))
+            comm_to_ai_title[num] = row.get('title', '') or ''
+        except (TypeError, ValueError):
+            pass
+
+    # level_by_entity[eid][level] = (comm_num, title)
+    level_by_entity: dict = {}
+    available_levels: list = []
     for _, row in comms_df.iterrows():
-        level    = int(row['level'])    if (row.get('level')     is not None and not math.isnan(float(row['level'] or 0)))    else 999
-        comm_num = int(row['community']) if (row.get('community') is not None and not math.isnan(float(row['community'] or 0))) else None
-        title    = row.get('title', '') or ''
+        try:
+            level    = int(float(row['level']))
+            comm_num = int(float(row['community']))
+        except (TypeError, ValueError):
+            continue
+        if level not in available_levels:
+            available_levels.append(level)
+        title = comm_to_ai_title.get(comm_num, f'Community {comm_num}')
         for eid in _to_list(row.get('entity_ids')):
-            prev = entity_community.get(eid)
-            if prev is None or level < prev['level']:
-                entity_community[eid] = {'community': comm_num, 'level': level, 'title': title}
+            level_by_entity.setdefault(eid, {})[level] = (comm_num, title)
+
+    available_levels.sort()
+
+    def _comm_at(eid: str, target: int):
+        """Return (comm_num, title) at target level; fall back to closest coarser."""
+        lvls = level_by_entity.get(eid, {})
+        for l in range(target, -1, -1):
+            if l in lvls:
+                return lvls[l]
+        return (None, '')
 
     # ── text_unit → document_ids mapping ─────────────────────────────────────
     tu_to_docs = {}
@@ -441,13 +480,18 @@ def api_umap():
         x, y  = float(x), float(y)
         eid   = str(row['id'])
         name  = row.get('title', '') or ''
-        comm  = entity_community.get(eid, {})
         doc_ids = []
         for tu_id in _to_list(row.get('text_unit_ids')):
             for did in tu_to_docs.get(str(tu_id), []):
                 if did not in doc_ids:
                     doc_ids.append(did)
         pos[name] = (x, y)
+        # Per-level community fields so the frontend can switch without re-fetching
+        comm_fields: dict = {}
+        for L in available_levels:
+            c, t = _comm_at(eid, L)
+            comm_fields[f'community_l{L}'] = c
+            comm_fields[f'community_title_l{L}'] = t
         nodes.append({
             'id':              eid,
             'name':            name,
@@ -456,8 +500,7 @@ def api_umap():
             'degree':          int(row.get('degree', 0) or 0),
             'frequency':       int(row.get('frequency', 0) or 0),
             'x': x, 'y': y,
-            'community':       comm.get('community'),
-            'community_title': comm.get('title', ''),
+            **comm_fields,
             'document_ids':    doc_ids,
         })
 
@@ -476,7 +519,7 @@ def api_umap():
             'description': (row.get('description', '') or '')[:200],
         })
 
-    return jsonify({'nodes': nodes, 'edges': edges})
+    return jsonify({'nodes': nodes, 'edges': edges, 'comm_levels': available_levels})
 
 
 if __name__ == '__main__':

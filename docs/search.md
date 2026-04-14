@@ -15,10 +15,10 @@ GraphRAG supports four query strategies. Each is optimised for a different quest
 
 **CLI:**
 ```bash
-graphrag query --method local  --query "Who is John Doe?"
-graphrag query --method global --query "What are the main themes in this corpus?"
-graphrag query --method drift  --query "Analyse the relationship between X and Y"
-graphrag query --method basic  --query "Find documents about Z"
+python3 -m graphrag query --method local  --query "Who is John Doe?"
+python3 -m graphrag query --method global --query "What are the main themes in this corpus?"
+python3 -m graphrag query --method drift  --query "Analyse the relationship between X and Y"
+python3 -m graphrag query --method basic  --query "Find documents about Z"
 ```
 
 ---

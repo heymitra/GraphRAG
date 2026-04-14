@@ -31,7 +31,7 @@ source graphrag-env/bin/activate
 python3 import_neo4j.py
 ```
 
-The importer clears all existing data before loading. Run it after every `graphrag index` to keep Neo4j in sync with the Parquet outputs.
+The importer clears all existing data before loading. Run it after every `python -m graphrag index` to keep Neo4j in sync with the Parquet outputs.
 
 ---
 

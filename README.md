@@ -82,7 +82,7 @@ Open **[http://localhost:8501](http://localhost:8501)** in your browser.
 ./update_graph.sh
 ```
 
-Clears cache → runs `graphrag index` → imports to Neo4j.
+Clears cache → runs `python -m graphrag index` → imports to Neo4j.
 
 ### Option B — Manual steps
 
@@ -94,7 +94,7 @@ python3 extract_pdf.py
 
 # 2. Index with GraphRAG
 rm -rf cache/
-graphrag index
+python3 -m graphrag index
 
 # 3. Import to Neo4j
 python3 import_neo4j.py
@@ -194,6 +194,7 @@ RETURN e1.name, e2.name, r.description, r.text_unit_ids LIMIT 10
 | Wrong port | Browser → 7475, Bolt → 7688 (matches `import_neo4j.py`) |
 | Claim→Entity edges missing | Entity names in claims must match GraphRAG output exactly |
 | API rate limits | Reduce `max_gleanings` or `chunk_size` in `settings.yaml` |
+| `No such file or directory` when running `graphrag` | Use `python3 -m graphrag ...` from the activated venv, or recreate the venv after moving the project folder |
 
 ## License
 
