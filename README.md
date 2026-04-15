@@ -1,4 +1,4 @@
-# GraphRAG Neo4j Integration
+# GraphRAG
 
 Extract knowledge graphs from documents with [Microsoft GraphRAG](https://github.com/microsoft/graphrag), inspect them in Neo4j, and compare baseline prompts against auto-tuned prompts without overwriting your main pipeline output.
 
