@@ -89,10 +89,12 @@ Text: <chunk text>
 
 ```
 ("entity"<|>ENTITY_NAME<|>TYPE<|>description)
-<|>
+##
 ("relationship"<|>SOURCE<|>TARGET<|>description<|>strength 1-10)
-<COMPLETE>
+<|COMPLETE|>
 ```
+
+These delimiters are literal strings in the GraphRAG 3.x prompt file. Legacy placeholders like `{tuple_delimiter}` will break extraction.
 
 ### What this step produces
 
@@ -206,6 +208,8 @@ Text: <chunk text>
 ```
 (SUBJECT<|>OBJECT<|>CLAIM_TYPE<|>STATUS<|>START_DATE<|>END_DATE<|>DESCRIPTION<|>SOURCE_TEXT)
 ```
+
+Claims use the same literal GraphRAG 3.x delimiters: `<|>` between tuple fields, `##` between records, and `<|COMPLETE|>` to finish the response.
 
 `STATUS` must be one of: `TRUE`, `FALSE`, `SUSPECTED`.
 

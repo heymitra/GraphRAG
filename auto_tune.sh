@@ -56,10 +56,39 @@ STAGE_CMD=(
     stage
     --config
     "$CONFIG_FILE"
+    --for-prompt-tune
     --format
     shell
 )
 eval "$("${STAGE_CMD[@]}")"
+
+LIMIT_INFO_CMD=(
+    "$PYTHON_BIN"
+    "$PROJECT_ROOT/graphrag_runtime.py"
+    prompt-tune-limit
+    --root
+    "$RUNTIME_ROOT"
+    --limit
+    "$LIMIT"
+    --chunk-size
+    "$CHUNK_SIZE"
+    --overlap
+    "$OVERLAP"
+    --format
+    shell
+)
+eval "$("${LIMIT_INFO_CMD[@]}")"
+
+if [[ "${AVAILABLE_CHUNKS:-0}" -le 0 ]]; then
+    echo "Prompt tuning cannot run because the current input corpus produced no chunks." >&2
+    echo "Check the extracted text files in input/ and the chunking settings." >&2
+    exit 1
+fi
+
+if [[ "${EFFECTIVE_LIMIT}" != "${REQUESTED_LIMIT}" ]]; then
+    echo "Requested LIMIT=$REQUESTED_LIMIT exceeds available chunks ($AVAILABLE_CHUNKS)." >&2
+    echo "Capping prompt-tune limit to $EFFECTIVE_LIMIT for this run." >&2
+fi
 
 CMD=(
     "$PYTHON_BIN"
@@ -71,7 +100,7 @@ CMD=(
     --selection-method
     "$SELECTION_METHOD"
     --limit
-    "$LIMIT"
+    "$EFFECTIVE_LIMIT"
     --max-tokens
     "$MAX_TOKENS"
     --chunk-size
@@ -103,8 +132,11 @@ fi
 echo "Generating auto-tuned prompts..."
 echo "Config: ${CONFIG_PATH#$PROJECT_ROOT/}"
 echo "Runtime root: ${RUNTIME_ROOT#$PROJECT_ROOT/}"
+echo "Prompt staging: prompts_auto/ paths fall back to prompts/ until tuned prompts are generated."
 echo "Prompt output: prompts_auto/"
 echo "Selection method: $SELECTION_METHOD"
+echo "Prompt-tune chunks available: $AVAILABLE_CHUNKS"
+echo "Prompt-tune limit: $EFFECTIVE_LIMIT"
 
 "${CMD[@]}"
 

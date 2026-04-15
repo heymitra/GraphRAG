@@ -17,7 +17,7 @@ If you previously installed GraphRAG 2.x in the same virtual environment, recrea
 - PDF ingestion with `extract_pdf.py`
 - GraphRAG indexing for entities, relationships, claims, and communities
 - Neo4j import for GraphRAG parquet output
-- Flask frontend for uploads, pipeline logs, and graph exploration
+- Flask frontend for uploads, extraction QA, prompt-path comparison, and graph exploration
 - Auto prompt tuning with isolated tuned prompts, cache, logs, and output
 - Manual prompt tuning for claims and query prompts
 - Baseline and tuned querying through `query_graph.sh`
@@ -36,7 +36,7 @@ If you previously installed GraphRAG 2.x in the same virtual environment, recrea
 ├── output_auto/          # Tuned GraphRAG output (generated, git-ignored)
 ├── import_neo4j.py       # Neo4j import script
 ├── update_graph.sh       # Re-index + Neo4j import using the active config
-├── frontend/app.py       # Web UI; respects GRAPHRAG_CONFIG
+├── frontend/app.py       # Web UI with per-upload mode selection, document filtering, and manual Neo4j sync
 └── docs/                 # Deeper technical docs
 ```
 
@@ -98,6 +98,35 @@ python frontend/app.py
 
 Open `http://localhost:8501`.
 
+The frontend now exposes both pipelines in the same UI:
+
+- `Default prompts` reads and writes the baseline GraphRAG artifacts from `settings.yaml`
+- `Auto-tuned prompts` reads and writes the tuned GraphRAG artifacts from `settings.auto.yaml`
+
+The frontend is now optimized for extraction QA before Neo4j import:
+
+- the main `Results Source` switch changes which indexed dataset you are inspecting
+- the workspace strip shows the active prompt source, pipeline path, output path, visible-document count, and graph counts
+- the upload modal lets you choose the pipeline per upload, explains what that run will do, and exposes per-upload auto-tune flags when relevant
+- `Current Prompt Set` opens the live prompt files for the selected dataset or next upload path
+- the `Documents` modal shows indexed documents with metadata, lets you include or exclude them from the explorer view, contains the manual `Sync Neo4j` action, and can open the exact prompt snapshot recorded for each uploaded document
+
+Uploading from the frontend now extracts and indexes only. It does **not** write to Neo4j automatically.
+
+If you want the older terminal workflow where indexing and Neo4j import happen together, keep using `./update_graph.sh`.
+
+### Frontend comparison workflow
+
+Use this when you want to judge whether default prompts or auto-tuned prompts extract the better graph:
+
+1. Start the frontend with `python frontend/app.py`.
+2. Upload a PDF once with `Default prompts` and once with `Auto-tuned prompts`.
+3. Compare the two datasets by switching the `Results Source` control on the main page.
+4. Inspect the overview cards, document metadata, entities, relationships, claims, communities, and graph layout.
+5. Only after the extraction looks good, open `Documents` and click `Sync Neo4j`.
+
+Each successful frontend upload now records prompt provenance in `prompt_history/`. That snapshot stores the exact prompt files, hashes, and run timestamp used for that document's indexing run, so you can later inspect `Documents -> Inspect exact prompts` without relying on the current contents of `prompts/` or `prompts_auto/`.
+
 ### Run baseline queries
 
 ```bash
@@ -148,6 +177,10 @@ DISCOVER_ENTITY_TYPES="false" \
 
 `auto_tune.sh` writes prompts to `prompts_auto/` and keeps your baseline prompts untouched.
 
+If you run `auto_tune.sh` while `GRAPHRAG_CONFIG=settings.auto.yaml` is set, the script now stages a prompt-tune-safe runtime automatically. Any missing `prompts_auto/` prompt paths temporarily fall back to the matching baseline files in `prompts/` until the tuned prompts are generated.
+
+The wrapper also caps the effective prompt-tune `LIMIT` to the number of chunks currently available in `input/`. This avoids an upstream GraphRAG 3.0.6 crash on small corpora where the default `LIMIT=15` exceeds the sampleable chunk count.
+
 ### 2. Run the tuned pipeline
 
 ```bash
@@ -169,7 +202,27 @@ source graphrag-env/bin/activate
 GRAPHRAG_CONFIG=settings.auto.yaml python frontend/app.py
 ```
 
-The frontend derives its output and cache directories from the active config, so the tuned UI reads `output_auto/` automatically.
+`GRAPHRAG_CONFIG=settings.auto.yaml` now sets the **default startup mode** for the UI. You can still switch between `Default prompts` and `Auto-tuned prompts` from the frontend after it loads.
+
+If you choose `Auto-tuned prompts` as the upload mode, the app does the tuned flow automatically:
+
+1. extract the uploaded PDF into `input/`
+2. run `prompt-tune` against the current `input/` corpus
+3. regenerate `prompts_auto/`
+4. run tuned indexing into `output_auto/`
+
+That means the uploaded PDF is included in prompt tuning before the tuned index run.
+
+The frontend still leaves Neo4j alone at this stage. Use `Documents -> Sync Neo4j` only after you have inspected the tuned extraction output.
+
+If you want the old behavior and prefer to reuse already-generated `prompts_auto/`, disable the automatic retune step:
+
+```bash
+source graphrag-env/bin/activate
+AUTO_TUNE_ON_UPLOAD=false python frontend/app.py
+```
+
+With `AUTO_TUNE_ON_UPLOAD=false`, selecting `Auto-tuned prompts` in the upload modal requires `prompts_auto/` to already exist. Automatic prompt tuning on upload increases both latency and API cost for each tuned upload.
 
 ### 4. Compare baseline vs tuned results
 
@@ -191,7 +244,8 @@ When comparing, look at:
 - relationship recall and phrasing
 - community report titles and summaries
 - answer grounding and citation quality
-- whether the tuned graph produces better Neo4j structure for your domain
+- the document-level metadata in the `Documents` modal
+- whether the tuned graph produces better Neo4j structure for your domain after a manual sync
 
 ## Manual Prompt Tuning
 
@@ -227,6 +281,18 @@ After changing query prompts, rerun `./query_graph.sh`.
 
 ## Adding Documents
 
+### Upload through the frontend
+
+Open `python frontend/app.py`, choose the upload mode, and upload the PDF.
+
+- `Default prompts` runs `extract -> index`
+- `Auto-tuned prompts` runs `extract -> auto-tune -> index` when `AUTO_TUNE_ON_UPLOAD` is enabled
+- `Current Prompt Set` shows the current prompt files for the selected dataset or next upload path
+- the upload modal can also pass prompt-tuning flags such as `DOMAIN`, `SELECTION_METHOD`, `LIMIT`, `CHUNK_SIZE`, and `DISCOVER_ENTITY_TYPES` for that single upload
+- the uploaded document is then visible in the `Documents` modal with extraction metadata
+- Neo4j is not populated until you click `Sync Neo4j`
+- the exact prompt snapshot used for a successful indexing run can be inspected from `Documents -> Inspect exact prompts`
+
 ### Convert a PDF to text
 
 ```bash
@@ -249,6 +315,22 @@ python -m graphrag query --root "$RUNTIME_ROOT" --data "$OUTPUT_DIR" -m local "W
 ```
 
 `query_graph.sh`, `update_graph.sh`, and `auto_tune.sh` already do this for you.
+
+## Troubleshooting
+
+- If indexing fails during `generate_text_embeddings` with `The length of the values Array needs to be a multiple of the list_size`, the embedding model dimension and LanceDB vector size are out of sync. This repo now pins `vector_store.vector_size: 1536` for `text-embedding-3-small` and resets the local `lancedb` directory before each rebuild.
+
+## Tuned Frontend Uploads
+
+There are now three valid tuned workflows:
+
+- Terminal-first: run `./auto_tune.sh`, then `GRAPHRAG_CONFIG=settings.auto.yaml ./update_graph.sh`
+- Frontend-first, startup default tuned: launch `GRAPHRAG_CONFIG=settings.auto.yaml python frontend/app.py`, leave the modal on `Auto-tuned prompts`, and upload a PDF
+- Frontend-first, mixed mode: launch `python frontend/app.py`, then choose `Auto-tuned prompts` in the upload modal for only the uploads you want tuned
+
+The frontend auto-tune flow uses the entire current `input/` directory, not just the single last-uploaded file.
+
+Document inclusion checkboxes in the `Documents` modal filter the explorer only. They do not change the indexed parquet output, the prompt-tuning corpus, or what gets imported when you sync Neo4j.
 
 ## Documentation
 

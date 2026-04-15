@@ -57,6 +57,7 @@ cache:
 vector_store:
   type: lancedb
   db_uri: output_auto/lancedb
+  vector_size: 1536
 
 embed_text:
   embedding_model_id: default_embedding_model

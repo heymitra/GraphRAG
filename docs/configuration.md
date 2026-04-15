@@ -112,9 +112,12 @@ cache:
 vector_store:
   type: lancedb
   db_uri: output/lancedb
+  vector_size: 1536
 ```
 
 LanceDB is the embedded vector store used by the query layer. No separate service is required.
+
+`vector_size` must match the embedding model dimension. In this repo `text-embedding-3-small` returns 1536-dimensional vectors, so `vector_store.vector_size` must be `1536`. If you switch to `text-embedding-3-large`, change that to `3072`.
 
 ## Text Embeddings
 

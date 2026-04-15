@@ -33,6 +33,21 @@ GRAPHRAG_CONFIG=settings.auto.yaml ./update_graph.sh
 GRAPHRAG_CONFIG=settings.auto.yaml python3 frontend/app.py
 ```
 
+The frontend now supports both pipelines from one UI:
+
+- choose the dataset to inspect from the main `Results Source` control
+- choose the upload pipeline from the upload modal
+- open `Current Prompt Set` to inspect the live prompt files for the selected dataset or next upload path
+- pass per-upload auto-tune flags from the upload modal when using `Auto-tuned prompts`
+- review prompt source, pipeline path, output path, visible-document count, and graph counts from the results workspace strip
+- open `Documents` to inspect indexed document metadata, filter what the explorer shows, inspect the exact prompt snapshot recorded for a document, and manually sync Neo4j
+
+`GRAPHRAG_CONFIG=settings.auto.yaml` only changes the frontend's default startup mode. Set `AUTO_TUNE_ON_UPLOAD=false` if you want the `Auto-tuned prompts` upload path to reuse existing `prompts_auto/` instead of regenerating them.
+
+Frontend uploads no longer populate Neo4j automatically. That write happens only when you click `Documents -> Sync Neo4j`.
+
+Successful frontend uploads also write prompt provenance to `prompt_history/`, so a document can be traced back to the exact prompt files and hashes used for its indexing run.
+
 ### Query
 
 ```bash
@@ -64,4 +79,4 @@ python3 -m graphrag query --root "$RUNTIME_ROOT" --data "$OUTPUT_DIR" -m local "
 | `output_auto/*.parquet` | Tuned persisted knowledge model |
 | `cache/` and `cache_auto/` | LLM response caches |
 | `import_neo4j.py` | Loads GraphRAG output into Neo4j |
-| `frontend/app.py` | Web UI for uploads and inspection |
+| `frontend/app.py` | Web UI for uploads, extraction QA, document filtering, and manual Neo4j sync |

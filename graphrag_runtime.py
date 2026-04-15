@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import argparse
 import copy
+import dataclasses as std_dataclasses
 import json
 import shlex
 import shutil
@@ -31,6 +33,18 @@ PROMPT_PATH_KEYS = (
     ("basic_search", "prompt"),
 )
 
+LEGACY_PROMPT_PLACEHOLDERS = (
+    "{tuple_delimiter}",
+    "{record_delimiter}",
+    "{completion_delimiter}",
+)
+
+KNOWN_EMBEDDING_VECTOR_SIZES = {
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+}
+
 
 @dataclass
 class RuntimeConfigInfo:
@@ -40,6 +54,17 @@ class RuntimeConfigInfo:
     output_dir: str
     cache_dir: str
     reporting_dir: str
+    vector_store_dir: str
+
+
+@dataclass
+class PromptTuneLimitInfo:
+    root: str
+    available_chunks: int
+    requested_limit: int
+    effective_limit: int
+    chunk_size: int | None
+    overlap: int | None
 
 
 def _format_missing_prompt_message(
@@ -59,6 +84,48 @@ def _format_missing_prompt_message(
                 "Then rerun the tuned indexing command.",
             ]
         )
+    return "\n".join(lines)
+
+
+def _format_legacy_prompt_message(
+    config_path: Path,
+    legacy_prompts: dict[str, list[str]],
+) -> str:
+    lines = [
+        f"Incompatible GraphRAG 3.x prompt syntax for config: {config_path}",
+        "The following prompt files still use legacy 2.x delimiter placeholders:",
+    ]
+    for path, placeholders in legacy_prompts.items():
+        lines.append(f" - {path} -> {', '.join(placeholders)}")
+    lines.extend(
+        [
+            "",
+            "GraphRAG 3.x expects literal delimiters inside the prompt text:",
+            " - tuple delimiter: <|>",
+            " - record delimiter: ##",
+            " - completion delimiter: <|COMPLETE|>",
+            "",
+            "Replace the legacy placeholders or regenerate the prompts with GraphRAG 3.x.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _format_vector_size_message(
+    config_path: Path,
+    issues: list[str],
+) -> str:
+    lines = [
+        f"Embedding/vector-store mismatch for config: {config_path}",
+        *[f" - {issue}" for issue in issues],
+        "",
+        "The vector store dimension must match the embedding model output size.",
+        "Examples:",
+        " - text-embedding-3-small -> 1536",
+        " - text-embedding-3-large -> 3072",
+        "",
+        "Update vector_store.vector_size in the config before rerunning indexing.",
+    ]
     return "\n".join(lines)
 
 
@@ -98,6 +165,76 @@ def _set_nested(data: dict[str, Any], *keys: str, value: Any) -> None:
             cursor[key] = next_value
         cursor = next_value
     cursor[keys[-1]] = value
+
+
+def _get_embedding_model_name(settings: dict[str, Any]) -> str | None:
+    model_id = _get_nested(settings, "embed_text", "embedding_model_id")
+    if not model_id:
+        return None
+    model_config = _get_nested(settings, "embedding_models", str(model_id))
+    if not isinstance(model_config, dict):
+        return None
+    model_name = model_config.get("model")
+    return str(model_name) if model_name else None
+
+
+def find_vector_size_issues(
+    config_path: str | Path,
+) -> list[str]:
+    settings = load_settings(config_path)
+    model_name = _get_embedding_model_name(settings)
+    if not model_name:
+        return []
+
+    expected_size = KNOWN_EMBEDDING_VECTOR_SIZES.get(model_name)
+    if expected_size is None:
+        return []
+
+    issues: list[str] = []
+    configured_default = _get_nested(settings, "vector_store", "vector_size")
+    if configured_default is None:
+        if expected_size != 3072:
+            issues.append(
+                "vector_store.vector_size is not set, so GraphRAG will default to 3072 "
+                f"even though {model_name} returns {expected_size}-dimensional vectors."
+            )
+    else:
+        try:
+            default_size = int(configured_default)
+        except (TypeError, ValueError):
+            issues.append(
+                f"vector_store.vector_size must be an integer, got {configured_default!r}."
+            )
+        else:
+            if default_size != expected_size:
+                issues.append(
+                    f"vector_store.vector_size={default_size}, but {model_name} returns "
+                    f"{expected_size}-dimensional vectors."
+                )
+
+    index_schema = _get_nested(settings, "vector_store", "index_schema")
+    if isinstance(index_schema, dict):
+        for index_name, schema in index_schema.items():
+            if not isinstance(schema, dict):
+                continue
+            vector_size = schema.get("vector_size")
+            if vector_size is None:
+                continue
+            try:
+                parsed_size = int(vector_size)
+            except (TypeError, ValueError):
+                issues.append(
+                    f"vector_store.index_schema.{index_name}.vector_size must be an integer, "
+                    f"got {vector_size!r}."
+                )
+                continue
+            if parsed_size != expected_size:
+                issues.append(
+                    f"vector_store.index_schema.{index_name}.vector_size={parsed_size}, but "
+                    f"{model_name} returns {expected_size}-dimensional vectors."
+                )
+
+    return issues
 
 
 def resolve_project_path(
@@ -209,6 +346,50 @@ def _absolutize_prompt_paths(
             )
 
 
+def _rewrite_prompt_directory(
+    path_value: str,
+    *,
+    source_dir: str,
+    target_dir: str,
+) -> str:
+    path = Path(str(path_value))
+    parts = list(path.parts)
+    try:
+        index = parts.index(source_dir)
+    except ValueError:
+        return str(path_value)
+    parts[index] = target_dir
+    return str(Path(*parts))
+
+
+def _fallback_prompt_directory(
+    settings: dict[str, Any],
+    *,
+    source_dir: str,
+    target_dir: str,
+    project_root: Path = PROJECT_ROOT,
+) -> None:
+    for key_path in PROMPT_PATH_KEYS:
+        current = _get_nested(settings, *key_path)
+        if not current:
+            continue
+        fallback = _rewrite_prompt_directory(
+            str(current),
+            source_dir=source_dir,
+            target_dir=target_dir,
+        )
+        if fallback == str(current):
+            continue
+        fallback_path = Path(
+            resolve_project_path(
+                fallback,
+                project_root=project_root,
+            )
+        )
+        if fallback_path.exists():
+            _set_nested(settings, *key_path, value=fallback)
+
+
 def get_prompt_paths(
     config_path: str | Path,
     *,
@@ -226,6 +407,19 @@ def get_prompt_paths(
     return prompt_paths
 
 
+def config_uses_prompt_directory(
+    config_path: str | Path,
+    prompt_dir_name: str,
+    *,
+    project_root: Path = PROJECT_ROOT,
+) -> bool:
+    prompt_dir_fragment = f"/{prompt_dir_name.strip('/')}/"
+    return any(
+        prompt_dir_fragment in Path(path).as_posix()
+        for path in get_prompt_paths(config_path, project_root=project_root)
+    )
+
+
 def find_missing_prompt_paths(
     config_path: str | Path,
     *,
@@ -238,7 +432,28 @@ def find_missing_prompt_paths(
     ]
 
 
-def ensure_prompt_paths_exist(
+def find_legacy_prompt_placeholders(
+    config_path: str | Path,
+    *,
+    project_root: Path = PROJECT_ROOT,
+) -> dict[str, list[str]]:
+    legacy_prompts: dict[str, list[str]] = {}
+    for path in get_prompt_paths(config_path, project_root=project_root):
+        prompt_path = Path(path)
+        if not prompt_path.exists():
+            continue
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        matches = [
+            placeholder
+            for placeholder in LEGACY_PROMPT_PLACEHOLDERS
+            if placeholder in prompt_text
+        ]
+        if matches:
+            legacy_prompts[str(prompt_path)] = matches
+    return legacy_prompts
+
+
+def validate_prompt_paths(
     config_path: str | Path,
     *,
     project_root: Path = PROJECT_ROOT,
@@ -252,15 +467,52 @@ def ensure_prompt_paths_exist(
         raise FileNotFoundError(
             _format_missing_prompt_message(resolved_config, missing_prompts)
         )
+    legacy_prompts = find_legacy_prompt_placeholders(
+        resolved_config,
+        project_root=project_root,
+    )
+    if legacy_prompts:
+        raise ValueError(
+            _format_legacy_prompt_message(resolved_config, legacy_prompts)
+        )
 
 
-def _runtime_root_for(config_path: Path, *, project_root: Path = PROJECT_ROOT) -> Path:
+def validate_runtime_settings(
+    config_path: str | Path,
+    *,
+    project_root: Path = PROJECT_ROOT,
+) -> None:
+    resolved_config = resolve_config_path(str(config_path), project_root=project_root)
+    validate_prompt_paths(resolved_config, project_root=project_root)
+    vector_size_issues = find_vector_size_issues(resolved_config)
+    if vector_size_issues:
+        raise ValueError(
+            _format_vector_size_message(resolved_config, vector_size_issues)
+        )
+
+
+def ensure_prompt_paths_exist(
+    config_path: str | Path,
+    *,
+    project_root: Path = PROJECT_ROOT,
+) -> None:
+    validate_prompt_paths(config_path, project_root=project_root)
+
+
+def _runtime_root_for(
+    config_path: Path,
+    *,
+    project_root: Path = PROJECT_ROOT,
+    suffix: str | None = None,
+) -> Path:
     try:
         rel = config_path.relative_to(project_root)
         safe_name = "__".join(rel.parts)
     except ValueError:
         safe_name = config_path.name
     safe_name = safe_name.replace(".", "_")
+    if suffix:
+        safe_name = f"{safe_name}__{suffix}"
     return (project_root / ".graphrag-runtime" / safe_name).resolve()
 
 
@@ -271,6 +523,7 @@ def stage_runtime_config(
     output_override: str | None = None,
     cache_override: str | None = None,
     reporting_override: str | None = None,
+    for_prompt_tune: bool = False,
 ) -> RuntimeConfigInfo:
     resolved_config = resolve_config_path(str(config_path), project_root=project_root)
     settings = load_settings(resolved_config)
@@ -310,9 +563,20 @@ def stage_runtime_config(
     if "vector_store" in staged:
         _set_nested(staged, "vector_store", "db_uri", value=vector_store_uri)
 
+    if for_prompt_tune:
+        _fallback_prompt_directory(
+            staged,
+            source_dir="prompts_auto",
+            target_dir="prompts",
+            project_root=project_root,
+        )
     _absolutize_prompt_paths(staged, project_root=project_root)
 
-    runtime_root = _runtime_root_for(resolved_config, project_root=project_root)
+    runtime_root = _runtime_root_for(
+        resolved_config,
+        project_root=project_root,
+        suffix="prompt_tune" if for_prompt_tune else None,
+    )
     runtime_root.mkdir(parents=True, exist_ok=True)
 
     runtime_settings_path = runtime_root / "settings.yaml"
@@ -335,6 +599,7 @@ def stage_runtime_config(
         output_dir=output_dir,
         cache_dir=cache_dir,
         reporting_dir=reporting_dir,
+        vector_store_dir=vector_store_uri,
     )
 
 
@@ -343,13 +608,84 @@ def _print_shell(info: RuntimeConfigInfo) -> None:
         print(f"{key.upper()}={shlex.quote(value)}")
 
 
+def _print_shell_mapping(data: dict[str, Any]) -> None:
+    for key, value in data.items():
+        print(f"{key.upper()}={shlex.quote(str(value))}")
+
+
+async def _count_prompt_tune_chunks_async(
+    root_dir: str | Path,
+    *,
+    chunk_size: int | None = None,
+    overlap: int | None = None,
+) -> int:
+    from graphrag.config.load_config import load_config
+    from graphrag_chunking.chunker_factory import create_chunker
+    from graphrag_input import create_input_reader
+    from graphrag_llm.embedding import create_embedding
+    from graphrag_storage import create_storage
+    from graphrag.index.workflows.create_base_text_units import chunk_document
+
+    graph_config = load_config(root_dir=Path(root_dir))
+    if chunk_size is not None and chunk_size > 0:
+        graph_config.chunking.size = chunk_size
+    if overlap is not None and overlap >= 0:
+        graph_config.chunking.overlap = overlap
+
+    embeddings_llm_settings = graph_config.get_embedding_model_config(
+        graph_config.embed_text.embedding_model_id
+    )
+    model = create_embedding(embeddings_llm_settings)
+    tokenizer = model.tokenizer
+    chunker = create_chunker(graph_config.chunking, tokenizer.encode, tokenizer.decode)
+    input_storage = create_storage(graph_config.input_storage)
+    input_reader = create_input_reader(graph_config.input, input_storage)
+    dataset = await input_reader.read_files()
+
+    chunk_count = 0
+    for doc in dataset:
+        doc_dict = std_dataclasses.asdict(doc)
+        chunk_count += len(chunk_document(doc_dict, chunker))
+    return chunk_count
+
+
+def compute_prompt_tune_limit(
+    root_dir: str | Path,
+    *,
+    requested_limit: int,
+    chunk_size: int | None = None,
+    overlap: int | None = None,
+) -> PromptTuneLimitInfo:
+    available_chunks = asyncio.run(
+        _count_prompt_tune_chunks_async(
+            root_dir,
+            chunk_size=chunk_size,
+            overlap=overlap,
+        )
+    )
+    if available_chunks <= 0:
+        effective_limit = 0
+    elif requested_limit <= 0:
+        effective_limit = available_chunks
+    else:
+        effective_limit = min(requested_limit, available_chunks)
+    return PromptTuneLimitInfo(
+        root=str(Path(root_dir).resolve()),
+        available_chunks=available_chunks,
+        requested_limit=requested_limit,
+        effective_limit=effective_limit,
+        chunk_size=chunk_size,
+        overlap=overlap,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Stage a GraphRAG config into a runtime root with absolute paths.",
     )
     parser.add_argument(
         "command",
-        choices=("stage", "validate-prompts"),
+        choices=("stage", "validate-prompts", "validate-config", "prompt-tune-limit"),
         help="The helper operation to execute.",
     )
     parser.add_argument(
@@ -378,18 +714,76 @@ def main() -> int:
         default="json",
         help="How to print the staged config metadata.",
     )
+    parser.add_argument(
+        "--for-prompt-tune",
+        action="store_true",
+        help=(
+            "Stage a prompt-tune-safe runtime config. Any prompts_auto/ prompt paths "
+            "are rewritten to prompts/ when a matching baseline file exists."
+        ),
+    )
+    parser.add_argument(
+        "--root",
+        default=None,
+        help="GraphRAG runtime root to inspect for prompt-tune operations.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=15,
+        help="Requested prompt-tune chunk limit.",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        help="Override chunk size when computing prompt-tune chunk counts.",
+    )
+    parser.add_argument(
+        "--overlap",
+        type=int,
+        default=None,
+        help="Override chunk overlap when computing prompt-tune chunk counts.",
+    )
     args = parser.parse_args()
 
     if args.command == "validate-prompts":
         try:
-            ensure_prompt_paths_exist(
+            validate_prompt_paths(
                 args.config,
                 project_root=PROJECT_ROOT,
             )
-        except FileNotFoundError as exc:
+        except (FileNotFoundError, ValueError) as exc:
             print(str(exc))
             return 1
         print("Prompt paths validated.")
+        return 0
+
+    if args.command == "validate-config":
+        try:
+            validate_runtime_settings(
+                args.config,
+                project_root=PROJECT_ROOT,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            print(str(exc))
+            return 1
+        print("GraphRAG config validated.")
+        return 0
+
+    if args.command == "prompt-tune-limit":
+        if not args.root:
+            parser.error("--root is required for prompt-tune-limit")
+        info = compute_prompt_tune_limit(
+            args.root,
+            requested_limit=args.limit,
+            chunk_size=args.chunk_size,
+            overlap=args.overlap,
+        )
+        if args.format == "shell":
+            _print_shell_mapping(asdict(info))
+        else:
+            print(json.dumps(asdict(info)))
         return 0
 
     info = stage_runtime_config(
@@ -398,6 +792,7 @@ def main() -> int:
         output_override=args.output_dir,
         cache_override=args.cache_dir,
         reporting_override=args.reporting_dir,
+        for_prompt_tune=args.for_prompt_tune,
     )
 
     if args.format == "shell":

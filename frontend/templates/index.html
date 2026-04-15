@@ -6,13 +6,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>GraphRAG Explorer</title>
   <meta name="description"
-    content="Upload a PDF to extract a knowledge graph and explore entities, communities and relationships." />
+    content="Inspect and compare GraphRAG knowledge graph extraction quality driven by different prompt strategies." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=2" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=6" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
 
@@ -24,215 +24,420 @@
       <div class="logo-icon">🕸</div>
       GraphRAG Explorer
     </div>
-
     <div class="spacer"></div>
     <span class="status-pill idle" id="statusPill"><span class="dot"></span> <span id="statusLabel">Idle</span></span>
-
-    <select class="filter-select" id="globalDocFilter" style="margin-right:12px; max-width:250px;">
-      <option value="">All Documents</option>
-    </select>
-
-    <button class="topbar-btn" id="deleteDocBtn"
-      style="color: #ef4444; border: 1px solid rgba(239,68,68,0.5); display:none; margin-right:12px;">
-      🗑 Delete File
-    </button>
-
+    <button class="topbar-btn" id="openPromptLibraryBtn">Prompt Library</button>
     <button class="topbar-btn primary" id="openUploadModal">⬆ Upload PDF</button>
-    <a href="http://localhost:7475" target="_blank" class="topbar-btn">Open Neo4j ↗</a>
   </header>
 
-  <!-- ── Tab bar ────────────────────────────────────────────────── -->
-  <nav class="tab-bar">
-    <button class="tab-btn active" data-tab="entities">
-      Entities <span class="tab-count" id="count-entities">—</span>
-    </button>
-    <button class="tab-btn" data-tab="relationships">
-      Relationships <span class="tab-count" id="count-relationships">—</span>
-    </button>
-    <button class="tab-btn" data-tab="claims">
-      Claims <span class="tab-count" id="count-claims">—</span>
-    </button>
-    <button class="tab-btn" data-tab="communities">
-      Communities <span class="tab-count" id="count-communities">—</span>
-    </button>
-    <button class="tab-btn" data-tab="umap" id="umapTabBtn">
-      Graph Layout <span class="tab-count" id="count-umap">—</span>
-    </button>
-  </nav>
+  <!-- ── App Layout ────────────────────────────────────────────── -->
+  <div class="app-layout">
 
-  <!-- ── Main content ───────────────────────────────────────────── -->
-  <main class="main">
-
-    <!-- Entities tab -->
-    <div class="tab-panel active" id="tab-entities">
-      <div class="empty" id="entitiesEmpty">
-        <span class="big">🔍</span>
-        Upload a PDF to extract entities.
-      </div>
-      <div id="entitiesContent" style="display:none;">
-        <div class="controls-row">
-          <input class="search-box" id="entitySearch" placeholder="Search by name or description…" />
-          <select class="filter-select" id="typeFilter">
-            <option value="">All Types</option>
-          </select>
+    <!-- ── Documents Sidebar ─────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-header-top">
+          <span class="sidebar-label">Documents</span>
+          <div class="mode-toggle sidebar-mode-toggle" id="viewModeToggle">
+            {% for mode in available_modes %}
+            <button
+              class="mode-toggle-btn {% if mode.key == default_view_mode %}active{% endif %}"
+              type="button"
+              data-view-mode="{{ mode.key }}"
+              title="{{ mode.label }}"
+            >{{ 'Default' if mode.key == 'baseline' else 'Auto-Tuned' }}</button>
+            {% endfor %}
+          </div>
         </div>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Degree</th>
-              <th>Freq</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody id="entityBody"></tbody>
-        </table>
+        <div class="sidebar-mode-info" id="sidebarModeInfo">Loading dataset…</div>
       </div>
-    </div>
 
-    <!-- Relationships tab -->
-    <div class="tab-panel" id="tab-relationships">
-      <div class="empty" id="relsEmpty">
-        <span class="big">🔗</span>
-        No relationships yet.
-      </div>
-      <div id="relsContent" style="display:none;">
-        <input class="search-box" id="relSearch" placeholder="Search by entity or description…" />
-        <div id="relList"></div>
-      </div>
-    </div>
-
-    <!-- Claims tab -->
-    <div class="tab-panel" id="tab-claims">
-      <div class="empty" id="claimsEmpty">
-        <span class="big">⚖️</span>
-        No claims extracted yet.
-      </div>
-      <div id="claimsContent" style="display:none;">
-        <div class="controls-row">
-          <input class="search-box" id="claimSearch" placeholder="Search subject, type, or description…" />
-          <select class="filter-select" id="claimTypeFilter">
-            <option value="">All Types</option>
-          </select>
-          <select class="filter-select" id="claimStatusFilter">
-            <option value="">All Statuses</option>
-          </select>
+      <div class="sidebar-docs" id="sidebarDocsList">
+        <div class="sidebar-empty">
+          <span class="big">📄</span>
+          Upload a PDF to get started.
         </div>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th style="width:15%;">Subject</th>
-              <th style="width:14%;">Object</th>
-              <th style="width:15%;">Type</th>
-              <th style="width:10%;">Date</th>
-              <th style="width:9%;">Status</th>
-              <th style="width:37%;">Description</th>
-            </tr>
-          </thead>
-          <tbody id="claimBody"></tbody>
-        </table>
       </div>
-    </div>
 
-    <!-- Communities tab -->
-    <div class="tab-panel" id="tab-communities">
-      <div class="empty" id="commEmpty">
-        <span class="big">🏘</span>
-        No communities yet.
-      </div>
-      <div id="commContent" style="display:none;">
-        <div class="controls-row">
-          <input class="search-box" id="commSearch" placeholder="Search communities…" />
+      <div class="sidebar-footer">
+        <div class="sidebar-footer-summary" id="sidebarSummary"></div>
+        <div class="sidebar-footer-actions">
+          <button class="topbar-btn" id="selectAllDocsBtn" title="Include all documents in explorer view">All</button>
+          <button class="topbar-btn" id="clearDocsBtn" title="Exclude all documents from explorer view">None</button>
+          <button class="topbar-btn primary" id="syncNeo4jBtn">Sync Neo4j</button>
         </div>
-        <div class="comm-grid" id="commList"></div>
       </div>
-    </div>
+    </aside>
 
-    <!-- Graph layout tab -->
-    <div class="tab-panel" id="tab-umap">
-      <div class="empty" id="umapEmpty">
-        <span class="big">🗺</span>
-        No graph layout data yet. Run the indexing pipeline first.
-      </div>
-      <div id="umapContent" style="display:none; flex-direction:column; height:100%;">
+    <!-- ── Main Area ──────────────────────────────────────────────── -->
+    <div class="main-area">
 
-        <!-- Controls bar -->
-        <div class="umap-controls">
-          <div class="umap-ctrl-group">
-            <span class="umap-ctrl-label">Color by</span>
-            <button class="umap-mode-btn" id="colorByType">Entity Type</button>
-            <button class="umap-mode-btn active" id="colorByCommunity">Community</button>
+      <!-- Tab bar -->
+      <nav class="tab-bar">
+        <button class="tab-btn active" data-tab="entities">
+          Entities <span class="tab-count" id="count-entities">—</span>
+        </button>
+        <button class="tab-btn" data-tab="relationships">
+          Relationships <span class="tab-count" id="count-relationships">—</span>
+        </button>
+        <button class="tab-btn" data-tab="claims">
+          Claims <span class="tab-count" id="count-claims">—</span>
+        </button>
+        <button class="tab-btn" data-tab="communities">
+          Communities <span class="tab-count" id="count-communities">—</span>
+        </button>
+        <button class="tab-btn" data-tab="umap" id="umapTabBtn">
+          Graph Layout <span class="tab-count" id="count-umap">—</span>
+        </button>
+        <div class="tab-bar-spacer"></div>
+        <div class="tab-stats" id="modeMetaChips"></div>
+      </nav>
+
+      <!-- Tab content -->
+      <main class="main">
+
+        <!-- Entities tab -->
+        <div class="tab-panel active" id="tab-entities">
+          <div class="empty" id="entitiesEmpty">
+            <span class="big">🔍</span>
+            Upload a PDF to extract entities.
           </div>
-          <div class="umap-ctrl-group" id="commLevelGroup">
-            <span class="umap-ctrl-label" title="L0 = broadest (all entities); L1 = sub-communities; L2 = deepest but partial coverage">Granularity</span>
-            <button class="umap-mode-btn active" data-level="0" id="commLvl0" title="Broad: 14 root communities, covers all entities">Broad</button>
-            <button class="umap-mode-btn" data-level="1" id="commLvl1" title="Detailed: 51 sub-communities, covers ~97% of entities">Detailed</button>
-            <button class="umap-mode-btn" data-level="2" id="commLvl2" title="Fine: deepest split, 21 leaf communities covering ~32% of entities; others fall back to Detailed level">Fine</button>
-          </div>
-          <div class="umap-ctrl-group">
-            <label class="umap-toggle">
-              <input type="checkbox" id="showEdges" checked />
-              <span>Show edges</span>
-            </label>
-          </div>
-          <div class="umap-ctrl-group">
-            <label class="umap-toggle">
-              <input type="checkbox" id="showLabels" />
-              <span>Show labels</span>
-            </label>
-          </div>
-          <div class="umap-ctrl-group">
-            <span class="umap-ctrl-label">Min degree</span>
-            <input type="range" id="minDegree" min="0" max="30" value="0" step="1" style="width:90px;" />
-            <span class="umap-ctrl-label" id="minDegreeVal" style="min-width:18px;">0</span>
-          </div>
-          <div class="umap-ctrl-group" style="flex:1;"></div>
-          <div class="umap-ctrl-group">
-            <input class="search-box" id="umapSearch" placeholder="Highlight entity…"
-              style="width:180px;height:30px;font-size:.78rem;padding:4px 10px;" />
+          <div id="entitiesContent" style="display:none;">
+            <div class="controls-row">
+              <input class="search-box" id="entitySearch" placeholder="Search by name or description…" />
+              <select class="filter-select" id="typeFilter">
+                <option value="">All Types</option>
+              </select>
+            </div>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Type</th>
+                  <th>Degree</th>
+                  <th>Freq</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody id="entityBody"></tbody>
+            </table>
           </div>
         </div>
 
-        <!-- Chart + detail panel -->
-        <div style="display:flex;flex:1;min-height:0;gap:0;">
-          <div id="umapChart" style="flex:1;min-width:0;"></div>
-          <div id="umapDetail" class="umap-detail hidden">
-            <button id="umapDetailClose" class="umap-detail-close">✕</button>
-            <div class="umap-detail-type" id="udType"></div>
-            <div class="umap-detail-name" id="udName"></div>
-            <div class="umap-detail-meta" id="udMeta"></div>
-            <div class="umap-detail-desc" id="udDesc"></div>
-            <div class="umap-detail-comm" id="udComm"></div>
+        <!-- Relationships tab -->
+        <div class="tab-panel" id="tab-relationships">
+          <div class="empty" id="relsEmpty">
+            <span class="big">🔗</span>
+            No relationships yet.
+          </div>
+          <div id="relsContent" style="display:none;">
+            <input class="search-box" id="relSearch" placeholder="Search by entity or description…" />
+            <div id="relList"></div>
           </div>
         </div>
 
-      </div>
-    </div>
+        <!-- Claims tab -->
+        <div class="tab-panel" id="tab-claims">
+          <div class="empty" id="claimsEmpty">
+            <span class="big">⚖️</span>
+            No claims extracted yet.
+          </div>
+          <div id="claimsContent" style="display:none;">
+            <div class="controls-row">
+              <input class="search-box" id="claimSearch" placeholder="Search subject, type, or description…" />
+              <select class="filter-select" id="claimTypeFilter">
+                <option value="">All Types</option>
+              </select>
+              <select class="filter-select" id="claimStatusFilter">
+                <option value="">All Statuses</option>
+              </select>
+            </div>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width:15%;">Subject</th>
+                  <th style="width:14%;">Object</th>
+                  <th style="width:15%;">Type</th>
+                  <th style="width:10%;">Date</th>
+                  <th style="width:9%;">Status</th>
+                  <th style="width:37%;">Description</th>
+                </tr>
+              </thead>
+              <tbody id="claimBody"></tbody>
+            </table>
+          </div>
+        </div>
 
-  </main>
+        <!-- Communities tab -->
+        <div class="tab-panel" id="tab-communities">
+          <div class="empty" id="commEmpty">
+            <span class="big">🏘</span>
+            No communities yet.
+          </div>
+          <div id="commContent" style="display:none;">
+            <div class="controls-row">
+              <input class="search-box" id="commSearch" placeholder="Search communities…" />
+            </div>
+            <div class="comm-grid" id="commList"></div>
+          </div>
+        </div>
+
+        <!-- Graph layout tab -->
+        <div class="tab-panel" id="tab-umap">
+          <div class="empty" id="umapEmpty">
+            <span class="big">🗺</span>
+            No graph layout data yet. Run the indexing pipeline first.
+          </div>
+          <div id="umapContent" style="display:none; flex-direction:column; height:100%;">
+
+            <div class="umap-controls">
+              <div class="umap-ctrl-group">
+                <span class="umap-ctrl-label">Color by</span>
+                <button class="umap-mode-btn" id="colorByType">Entity Type</button>
+                <button class="umap-mode-btn active" id="colorByCommunity">Community</button>
+              </div>
+              <div class="umap-ctrl-group" id="commLevelGroup">
+                <span class="umap-ctrl-label" title="L0 = broadest; L1 = sub-communities; L2 = deepest">Granularity</span>
+                <button class="umap-mode-btn active" data-level="0" id="commLvl0">Broad</button>
+                <button class="umap-mode-btn" data-level="1" id="commLvl1">Detailed</button>
+                <button class="umap-mode-btn" data-level="2" id="commLvl2">Fine</button>
+              </div>
+              <div class="umap-ctrl-group">
+                <label class="umap-toggle">
+                  <input type="checkbox" id="showEdges" checked />
+                  <span>Show edges</span>
+                </label>
+              </div>
+              <div class="umap-ctrl-group">
+                <label class="umap-toggle">
+                  <input type="checkbox" id="showLabels" />
+                  <span>Show labels</span>
+                </label>
+              </div>
+              <div class="umap-ctrl-group">
+                <span class="umap-ctrl-label">Min degree</span>
+                <input type="range" id="minDegree" min="0" max="30" value="0" step="1" style="width:90px;" />
+                <span class="umap-ctrl-label" id="minDegreeVal" style="min-width:18px;">0</span>
+              </div>
+              <div class="umap-ctrl-group" style="flex:1;"></div>
+              <div class="umap-ctrl-group">
+                <input class="search-box" id="umapSearch" placeholder="Highlight entity…"
+                  style="width:180px;height:30px;font-size:.78rem;padding:4px 10px;" />
+              </div>
+            </div>
+
+            <div style="display:flex;flex:1;min-height:0;gap:0;">
+              <div id="umapChart" style="flex:1;min-width:0;"></div>
+              <div id="umapDetail" class="umap-detail hidden">
+                <button id="umapDetailClose" class="umap-detail-close">✕</button>
+                <div class="umap-detail-type" id="udType"></div>
+                <div class="umap-detail-name" id="udName"></div>
+                <div class="umap-detail-meta" id="udMeta"></div>
+                <div class="umap-detail-desc" id="udDesc"></div>
+                <div class="umap-detail-comm" id="udComm"></div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </main>
+    </div>
+  </div>
 
   <!-- ── Upload modal ───────────────────────────────────────────── -->
   <div class="modal-overlay" id="uploadModal">
-    <div class="modal">
+    <div class="modal modal-upload-new">
       <div class="modal-header">
-        <div class="modal-title">Upload PDF</div>
+        <div>
+          <div class="modal-title">Upload PDF for Extraction</div>
+          <p class="modal-subtitle">Choose an extraction mode. After indexing, the document panel shows the exact prompt used.</p>
+        </div>
         <button class="modal-close" id="closeModal">✕</button>
       </div>
 
-      <div class="drop-zone" id="dropZone">
-        <div class="dz-icon">📄</div>
-        <p>Drag & drop a PDF here, or <span id="browseBtn">browse files</span></p>
-        <p id="modalFileName"></p>
+      <div class="upload-modal-body-new">
+
+        <!-- File drop zone -->
+        <div class="drop-zone" id="dropZone">
+          <div class="dz-icon">📄</div>
+          <p>Drag &amp; drop a PDF here, or <span id="browseBtn">browse files</span></p>
+          <p id="modalFileName"></p>
+        </div>
+        <input type="file" id="fileInput" accept="application/pdf" />
+
+        <!-- Mode selection -->
+        <div class="upload-section-label">Extraction Mode</div>
+        <div class="mode-cards" id="uploadModeCards">
+          {% for mode in available_modes %}
+          <div class="mode-card {% if mode.key == default_view_mode %}selected{% endif %}"
+            data-upload-mode="{{ mode.key }}">
+            <div class="mode-card-icon">{{ '📋' if mode.key == 'baseline' else '🎯' }}</div>
+            <div class="mode-card-name">{{ mode.label }}</div>
+            <div class="mode-card-desc">
+              {% if mode.key == 'baseline' %}
+              Uses fixed prompts from <code>prompts/</code>. Reproducible — same output for the same input.
+              {% else %}
+              Runs prompt auto-tuning before indexing. Adapts entity types and instructions to the document's domain.
+              {% endif %}
+            </div>
+            <div class="mode-card-pipeline">{{ mode.pipeline_path }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        <p id="uploadModeHint" class="upload-mode-hint"></p>
+
+        <!-- Auto-tune options -->
+        <section class="tuning-panel" id="autoTunePanel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Auto-Tune Options</div>
+              <p class="panel-note" id="autoTunePanelNote">These flags are passed to auto_tune.sh for this upload only.</p>
+            </div>
+            <button class="topbar-btn" type="button" id="toggleAdvancedTuning">Advanced</button>
+          </div>
+
+          <div class="tuning-grid">
+            <label class="field-group">
+              <span>Domain</span>
+              <input class="form-input" id="tuneDomain" placeholder="e.g. legal case reports" />
+            </label>
+            <label class="field-group">
+              <span>Language</span>
+              <input class="form-input" id="tuneLanguage" value="English" />
+            </label>
+            <label class="field-group">
+              <span>Selection method</span>
+              <select class="form-input" id="tuneSelectionMethod">
+                <option value="random" selected>random</option>
+                <option value="auto">auto</option>
+              </select>
+            </label>
+            <label class="field-group">
+              <span>Limit</span>
+              <input class="form-input" id="tuneLimit" type="number" min="1" value="15" />
+            </label>
+          </div>
+
+          <label class="toggle-row">
+            <input type="checkbox" id="tuneDiscoverEntityTypes" />
+            <span>Discover entity types automatically</span>
+          </label>
+
+          <div class="tuning-grid advanced-grid hidden" id="advancedTuneFields">
+            <label class="field-group">
+              <span>Max tokens</span>
+              <input class="form-input" id="tuneMaxTokens" type="number" min="1" value="2000" />
+            </label>
+            <label class="field-group">
+              <span>Chunk size</span>
+              <input class="form-input" id="tuneChunkSize" type="number" min="1" value="3000" />
+            </label>
+            <label class="field-group">
+              <span>Overlap</span>
+              <input class="form-input" id="tuneOverlap" type="number" min="0" value="300" />
+            </label>
+            <label class="field-group">
+              <span>Min examples</span>
+              <input class="form-input" id="tuneMinExamplesRequired" type="number" min="1" value="2" />
+            </label>
+            <label class="field-group">
+              <span>N subset max</span>
+              <input class="form-input" id="tuneNSubsetMax" type="number" min="1" value="300" />
+            </label>
+            <label class="field-group">
+              <span>K</span>
+              <input class="form-input" id="tuneK" type="number" min="1" value="15" />
+            </label>
+          </div>
+        </section>
+
+        <button class="btn btn-primary" id="uploadBtn" disabled style="margin-top:16px;">⚡ Upload &amp; Process</button>
+
+        <section class="log-panel hidden" id="logPanel">
+          <div class="panel-header panel-header-compact">
+            <div>
+              <div class="panel-title">Pipeline Log</div>
+              <p class="panel-note">Live output from extract, prompt-tune, and indexing.</p>
+            </div>
+          </div>
+          <div class="log-box" id="logBox"></div>
+        </section>
+
       </div>
-      <input type="file" id="fileInput" accept="application/pdf" />
-      <button class="btn btn-primary" id="uploadBtn" disabled style="margin-top: 14px;">⚡ Upload &amp; Process</button>
-      <div class="log-box" id="logBox"></div>
+    </div>
+  </div>
+
+  <!-- ── Prompt Library modal (current dataset) ─────────────────── -->
+  <div class="modal-overlay" id="promptLibraryModal">
+    <div class="modal modal-wide modal-document-prompts">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Prompt Library</div>
+          <p class="modal-subtitle" id="promptLibrarySubtitle">Inspecting the current prompt files for the active dataset.</p>
+        </div>
+        <button class="modal-close" id="closePromptLibraryModal">✕</button>
+      </div>
+
+      <div class="prompt-preview-status" id="promptPreviewStatus"></div>
+      <div class="document-prompt-meta" id="promptPreviewHint"></div>
+
+      <label class="field-group" style="margin-top:14px;">
+        <span>Prompt File</span>
+        <select class="form-input" id="promptPreviewSelect"></select>
+      </label>
+
+      <div class="prompt-preview-meta" id="promptPreviewMeta"></div>
+      <pre class="prompt-preview prompt-preview-document" id="promptPreviewContent">Select a prompt file above to inspect its contents.</pre>
+    </div>
+  </div>
+
+  <!-- ── Document Prompt Snapshot modal (per-document) ─────────── -->
+  <div class="modal-overlay" id="documentPromptModal">
+    <div class="modal modal-wide modal-document-prompts">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Prompt Snapshot</div>
+          <p class="modal-subtitle" id="documentPromptSubtitle">Exact prompts recorded when this document was indexed.</p>
+        </div>
+        <button class="modal-close" id="closeDocumentPromptModal">✕</button>
+      </div>
+
+      <div class="document-prompt-summary" id="documentPromptSummary"></div>
+      <div class="document-prompt-meta" id="documentPromptMeta"></div>
+
+      <label class="field-group" style="margin-top:14px;">
+        <span>Snapshot File</span>
+        <select class="form-input" id="documentPromptSelect"></select>
+      </label>
+
+      <div class="prompt-preview-meta" id="documentPromptFileMeta"></div>
+      <pre class="prompt-preview prompt-preview-document" id="documentPromptContent">Select a snapshot file to inspect it.</pre>
     </div>
   </div>
 
   <script>
-    /* ── Tabs ──────────────────────────────────────────────────────── */
+    const MODE_LABELS = {{ mode_labels | tojson }};
+    const MODE_OPTIONS = Object.fromEntries(
+      ({{ available_modes | tojson }}).map(mode => [mode.key, mode])
+    );
+
+    let activeViewMode   = {{ default_view_mode | tojson }};
+    let selectedUploadMode = activeViewMode;
+    let pendingPipelineMode = activeViewMode;
+    let pendingTaskReload   = true;
+    let currentModeLabel = MODE_LABELS[activeViewMode] || 'Default prompts';
+
+    let allDocuments   = [];
+    let allEntities    = [];
+    let allRels        = [];
+    let allClaims      = [];
+    let allCommunities = [];
+    let allStats       = [];
+    const includedDocumentsByMode = {};
+    const knownDocumentsByMode    = {};
+
+    /* ── Tabs ──────────────────────────────────────────────────── */
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -242,26 +447,531 @@
       });
     });
 
-    /* ── Modal open/close ──────────────────────────────────────────── */
-    const modal = document.getElementById('uploadModal');
-    document.getElementById('openUploadModal').addEventListener('click', () => modal.classList.add('open'));
-    document.getElementById('closeModal').addEventListener('click', closeModal);
-    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
-    function closeModal() {
-      if (pipeline_running) return;   // don't close while running
-      modal.classList.remove('open');
+    /* ── Element refs ──────────────────────────────────────────── */
+    const uploadModal          = document.getElementById('uploadModal');
+    const promptLibraryModal   = document.getElementById('promptLibraryModal');
+    const documentPromptModal  = document.getElementById('documentPromptModal');
+    const viewModeButtons      = Array.from(document.querySelectorAll('[data-view-mode]'));
+    const uploadModeCardEls    = document.querySelectorAll('.mode-card');
+    const uploadModeHint       = document.getElementById('uploadModeHint');
+    const openUploadModalBtn   = document.getElementById('openUploadModal');
+    const openPromptLibraryBtn = document.getElementById('openPromptLibraryBtn');
+    const syncNeo4jBtn         = document.getElementById('syncNeo4jBtn');
+    const sidebarDocsList      = document.getElementById('sidebarDocsList');
+    const modeMetaChips        = document.getElementById('modeMetaChips');
+    const autoTunePanel        = document.getElementById('autoTunePanel');
+    const autoTunePanelNote    = document.getElementById('autoTunePanelNote');
+    const toggleAdvancedTuningBtn = document.getElementById('toggleAdvancedTuning');
+    const advancedTuneFields   = document.getElementById('advancedTuneFields');
+    const promptPreviewSelect  = document.getElementById('promptPreviewSelect');
+    const promptPreviewMeta    = document.getElementById('promptPreviewMeta');
+    const promptPreviewContent = document.getElementById('promptPreviewContent');
+    const promptPreviewHint    = document.getElementById('promptPreviewHint');
+    const promptPreviewStatus  = document.getElementById('promptPreviewStatus');
+    const logPanel             = document.getElementById('logPanel');
+    const logBox               = document.getElementById('logBox');
+    const documentPromptSummary   = document.getElementById('documentPromptSummary');
+    const documentPromptMeta      = document.getElementById('documentPromptMeta');
+    const documentPromptSelect    = document.getElementById('documentPromptSelect');
+    const documentPromptFileMeta  = document.getElementById('documentPromptFileMeta');
+    const documentPromptContent   = document.getElementById('documentPromptContent');
+
+    const promptKeyByMode       = {};
+    const documentPromptKeyByRun = {};
+    const autoTuneFieldIds = [
+      'tuneDomain','tuneLanguage','tuneSelectionMethod','tuneLimit',
+      'tuneDiscoverEntityTypes','tuneMaxTokens','tuneChunkSize',
+      'tuneOverlap','tuneMinExamplesRequired','tuneNSubsetMax','tuneK',
+    ];
+
+    let activeDocumentPromptRun = '';
+    let activeDocumentPromptDocumentKey = '';
+    let activePromptLibraryMode = activeViewMode;
+    let pipeline_running = false;
+
+    /* ── Utilities ─────────────────────────────────────────────── */
+    function esc(str) {
+      return String(str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function shortPath(path) {
+      if (!path) return '';
+      const parts = String(path).split('/');
+      return parts[parts.length - 1] || path;
+    }
+    function shortHash(value, length = 12) {
+      if (!value) return '';
+      return String(value).slice(0, length);
+    }
+    function formatBytes(bytes) {
+      if (!bytes && bytes !== 0) return '';
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+    function formatAutoTuneOptions(options) {
+      const entries = Object.entries(options || {}).filter(([, v]) => v !== '' && v != null);
+      if (!entries.length) return 'No per-upload overrides recorded.';
+      return entries.map(([k, v]) => `${k}=${v}`).join(' · ');
     }
 
-    /* ── File drop/select ──────────────────────────────────────────── */
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('fileInput');
-    const uploadBtn = document.getElementById('uploadBtn');
+    /* ── View mode (which dataset is shown) ─────────────────────── */
+    function updateViewModeButtons() {
+      viewModeButtons.forEach(btn => {
+        const isActive = btn.dataset.viewMode === activeViewMode;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+      });
+    }
+
+    function updateSidebarModeInfo() {
+      const info = MODE_OPTIONS[activeViewMode];
+      const el   = document.getElementById('sidebarModeInfo');
+      if (!info || !el) return;
+      el.textContent = info.uses_auto_prompts
+        ? `Auto-tuned output · ${shortPath(info.output_dir)}`
+        : `Baseline output · ${shortPath(info.output_dir)}`;
+    }
+
+    function updateModeMetaChips() {
+      const statsMap = Object.fromEntries((allStats || []).map(s => [s.label, s.count]));
+      const chips = [];
+      if (statsMap.Entity      !== undefined) chips.push(`${statsMap.Entity} entities`);
+      if (statsMap.Relationship !== undefined) chips.push(`${statsMap.Relationship} rels`);
+      if (statsMap.Community   !== undefined) chips.push(`${statsMap.Community} communities`);
+      if (statsMap.Claim !== undefined && statsMap.Claim > 0) chips.push(`${statsMap.Claim} claims`);
+      modeMetaChips.innerHTML = chips.map(c =>
+        `<span class="tab-stat-chip">${esc(c)}</span>`
+      ).join('');
+    }
+
+    async function setViewMode(mode, options = {}) {
+      const { reload = true } = options;
+      activeViewMode = MODE_LABELS[mode] ? mode : {{ default_view_mode | tojson }};
+      updateViewModeButtons();
+      updateSidebarModeInfo();
+      updateModeMetaChips();
+      if (reload) {
+        await loadData();
+      } else {
+        renderSidebar();
+      }
+    }
+
+    viewModeButtons.forEach(btn => {
+      btn.addEventListener('click', () => setViewMode(btn.dataset.viewMode));
+    });
+
+    /* ── Upload mode (mode cards) ────────────────────────────────── */
+    function getSelectedUploadMode() { return selectedUploadMode; }
+
+    function setUploadMode(mode) {
+      selectedUploadMode = mode;
+      uploadModeCardEls.forEach(card => {
+        card.classList.toggle('selected', card.dataset.uploadMode === mode);
+      });
+      updateUploadModeHint();
+      updateAutoTunePanel();
+    }
+
+    uploadModeCardEls.forEach(card => {
+      card.addEventListener('click', () => {
+        if (!card.classList.contains('disabled')) setUploadMode(card.dataset.uploadMode);
+      });
+    });
+
+    function updateUploadModeHint() {
+      const mode = getSelectedUploadMode();
+      const info = MODE_OPTIONS[mode];
+      if (!info) { uploadModeHint.textContent = ''; return; }
+      const note = mode === activeViewMode
+        ? `Explorer is already showing this dataset.`
+        : `Explorer is showing ${MODE_LABELS[activeViewMode]}; this upload will rebuild ${info.label}.`;
+      uploadModeHint.textContent = `${note} Exact prompts will be recorded after a successful run.`;
+    }
+
+    function setTuneInputsDisabled(disabled) {
+      autoTuneFieldIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = disabled;
+      });
+    }
+
+    function updateAutoTunePanel() {
+      const mode = getSelectedUploadMode();
+      const info = MODE_OPTIONS[mode];
+      const supportsAutoTune = Boolean(info && info.uses_auto_prompts);
+      const autoTuneLive     = Boolean(supportsAutoTune && info.auto_tune_on_upload);
+      autoTunePanel.style.display = supportsAutoTune ? '' : 'none';
+      if (!supportsAutoTune) {
+        advancedTuneFields.classList.add('hidden');
+        toggleAdvancedTuningBtn.textContent = 'Advanced';
+        return;
+      }
+      autoTunePanelNote.textContent = autoTuneLive
+        ? 'These flags are passed to auto_tune.sh for this upload only.'
+        : 'AUTO_TUNE_ON_UPLOAD is off — existing prompts_auto/ will be reused and these flags are ignored.';
+      setTuneInputsDisabled(!autoTuneLive);
+      toggleAdvancedTuningBtn.disabled = !autoTuneLive;
+      if (!autoTuneLive) {
+        advancedTuneFields.classList.add('hidden');
+        toggleAdvancedTuningBtn.textContent = 'Advanced';
+      }
+    }
+
+    function buildAutoTunePayload() {
+      return {
+        domain:              document.getElementById('tuneDomain').value.trim(),
+        language:            document.getElementById('tuneLanguage').value.trim(),
+        selection_method:    document.getElementById('tuneSelectionMethod').value,
+        limit:               document.getElementById('tuneLimit').value,
+        max_tokens:          document.getElementById('tuneMaxTokens').value,
+        chunk_size:          document.getElementById('tuneChunkSize').value,
+        overlap:             document.getElementById('tuneOverlap').value,
+        min_examples_required: document.getElementById('tuneMinExamplesRequired').value,
+        n_subset_max:        document.getElementById('tuneNSubsetMax').value,
+        k:                   document.getElementById('tuneK').value,
+        discover_entity_types: document.getElementById('tuneDiscoverEntityTypes').checked ? 'true' : 'false',
+      };
+    }
+
+    /* ── Prompt library (current dataset) ───────────────────────── */
+    function renderPromptPreviewState(message, kind = 'neutral') {
+      promptPreviewStatus.className = `prompt-preview-status ${kind}`;
+      promptPreviewStatus.textContent = message || '';
+    }
+
+    function describePromptPreview(mode, selected) {
+      const info = MODE_OPTIONS[mode] || {};
+      if (!selected) return { status: 'No prompt file configured.', statusKind: 'warning', hint: '', meta: '' };
+      if (!info.uses_auto_prompts) {
+        return {
+          status: 'Baseline prompt — fixed in prompts/ and known before upload.',
+          statusKind: 'static',
+          hint: 'This is the exact repository prompt file. It stays constant unless you edit prompts/ manually.',
+          meta: [`Static file ${selected.path}`, selected.updated_at ? `Updated ${selected.updated_at}` : ''].filter(Boolean).join(' · '),
+        };
+      }
+      if (selected.source_kind === 'active') {
+        return {
+          status: info.auto_tune_on_upload
+            ? 'Current tuned prompt — generated by the last prompt-tune run.'
+            : 'Stored tuned prompt — will be reused (AUTO_TUNE_ON_UPLOAD is off).',
+          statusKind: 'live',
+          hint: info.auto_tune_on_upload
+            ? 'Uploading in auto-tuned mode will re-run prompt-tune. This prompt may change after the next upload.'
+            : 'AUTO_TUNE_ON_UPLOAD is off; the stored prompts_auto/ file will be reused.',
+          meta: [`Current tuned file ${selected.path}`, selected.updated_at ? `Generated ${selected.updated_at}` : ''].filter(Boolean).join(' · '),
+        };
+      }
+      if (selected.source_kind === 'fallback') {
+        return {
+          status: 'Tuned prompt not generated yet — previewing baseline fallback.',
+          statusKind: 'warning',
+          hint: 'The real tuned prompt will be produced after prompt-tune runs on the current input corpus.',
+          meta: [`Expected ${selected.path}`, selected.preview_path ? `Previewing fallback ${selected.preview_path}` : ''].filter(Boolean).join(' · '),
+        };
+      }
+      return { status: 'Prompt file is missing.', statusKind: 'error', hint: 'Run prompt-tune to regenerate.', meta: `Missing ${selected.path}` };
+    }
+
+    async function loadPromptPreview(mode, requestedKey = null) {
+      const selectedMode = mode || activePromptLibraryMode || activeViewMode;
+      const key = requestedKey || promptKeyByMode[selectedMode] || '';
+      promptPreviewContent.textContent = 'Loading…';
+      promptPreviewMeta.textContent = '';
+      renderPromptPreviewState('Loading…');
+      try {
+        const res  = await fetch(`/api/prompts?mode=${encodeURIComponent(selectedMode)}&key=${encodeURIComponent(key)}`);
+        const data = await res.json();
+        const entries = data.entries || [];
+        promptPreviewSelect.innerHTML = entries.map(e =>
+          `<option value="${esc(e.key)}">${esc(e.category)} · ${esc(e.label)}</option>`
+        ).join('');
+        if (!data.selected) {
+          promptPreviewContent.textContent = 'No prompt configured for this mode.';
+          renderPromptPreviewState('No prompt file available.', 'warning');
+          return;
+        }
+        promptKeyByMode[selectedMode] = data.selected.key;
+        promptPreviewSelect.value = data.selected.key;
+        const state = describePromptPreview(selectedMode, data.selected);
+        renderPromptPreviewState(state.status, state.statusKind);
+        promptPreviewMeta.textContent = [data.selected.label, state.meta].filter(Boolean).join(' · ');
+        promptPreviewHint.textContent = state.hint;
+        promptPreviewContent.textContent = data.selected.content || 'No prompt text available.';
+      } catch (e) {
+        promptPreviewContent.textContent = 'Failed to load prompt preview.';
+        renderPromptPreviewState('Load failed.', 'error');
+      }
+    }
+
+    async function openPromptLibrary(mode) {
+      activePromptLibraryMode = MODE_LABELS[mode] ? mode : activeViewMode;
+      const info = MODE_OPTIONS[activePromptLibraryMode];
+      document.getElementById('promptLibrarySubtitle').textContent =
+        `Inspecting current prompt files for: ${info ? info.label : activePromptLibraryMode}`;
+      await loadPromptPreview(activePromptLibraryMode);
+      promptLibraryModal.classList.add('open');
+    }
+
+    /* ── Document prompt snapshot (per-document) ─────────────────── */
+    async function loadDocumentPromptAudit(documentKey, requestedKey = null) {
+      activeDocumentPromptDocumentKey = documentKey;
+      activeDocumentPromptRun = '';
+      documentPromptSummary.innerHTML  = 'Loading…';
+      documentPromptMeta.textContent   = '';
+      documentPromptFileMeta.textContent = '';
+      documentPromptContent.textContent = 'Loading snapshot…';
+
+      try {
+        const res = await fetch(
+          `/api/document-prompts?mode=${encodeURIComponent(activeViewMode)}&document_key=${encodeURIComponent(documentKey)}&key=${encodeURIComponent(requestedKey || '')}`
+        );
+        const data = await res.json();
+
+        if (!res.ok || data.error) {
+          documentPromptSummary.innerHTML = esc(data.error || 'No prompt provenance recorded for this document yet.');
+          documentPromptMeta.textContent  = 'Re-upload or re-index this document to record exact prompt snapshots.';
+          documentPromptFileMeta.textContent = '';
+          documentPromptSelect.innerHTML  = '';
+          documentPromptContent.textContent = '';
+          documentPromptModal.classList.add('open');
+          return;
+        }
+
+        const record  = data.record || {};
+        const entries = data.entries || [];
+        const selected = data.selected || null;
+        activeDocumentPromptRun = record.run_id || '';
+        if (selected) documentPromptKeyByRun[activeDocumentPromptRun] = selected.key;
+
+        const isAutoTuned = Boolean(record.auto_tune_on_upload);
+        const badgeClass  = isAutoTuned ? 'auto-tuned-prompt' : 'default-prompt';
+        const badgeLabel  = isAutoTuned ? 'Auto-Tuned' : 'Default';
+
+        documentPromptSummary.innerHTML =
+          `${esc(record.document_title || documentKey)} &nbsp;<span class="prompt-mode-badge ${badgeClass}">${esc(badgeLabel)}</span>`;
+        document.getElementById('documentPromptSubtitle').textContent =
+          `Recorded ${record.recorded_at || 'unknown'} · Pipeline: ${record.pipeline_path || 'unavailable'}`;
+        documentPromptMeta.textContent =
+          `${record.prompt_count || entries.length || 0} prompt snapshots · ${record.manifest_path || ''} · ${formatAutoTuneOptions(record.auto_tune_options)}`;
+
+        documentPromptSelect.innerHTML = entries.map(e =>
+          `<option value="${esc(e.key)}">${esc(e.category)} · ${esc(e.label)}</option>`
+        ).join('');
+
+        if (!selected) {
+          documentPromptFileMeta.textContent = '';
+          documentPromptContent.textContent  = 'No prompt snapshots were recorded for this document.';
+          documentPromptModal.classList.add('open');
+          return;
+        }
+
+        documentPromptSelect.value = selected.key;
+        documentPromptFileMeta.textContent = [
+          `Snapshot ${selected.snapshot_path}`,
+          `Source ${selected.path}`,
+          selected.updated_at ? `Updated ${selected.updated_at}` : '',
+          selected.sha256 ? `SHA256 ${shortHash(selected.sha256)}` : '',
+        ].filter(Boolean).join(' · ');
+        documentPromptContent.textContent = selected.content || 'No prompt content stored for this snapshot.';
+        documentPromptModal.classList.add('open');
+      } catch (err) {
+        documentPromptSummary.textContent = 'Could not load prompt provenance.';
+        documentPromptMeta.textContent     = String(err);
+        documentPromptModal.classList.add('open');
+      }
+    }
+
+    /* ── Sidebar rendering ───────────────────────────────────────── */
+    function renderSidebar() {
+      const included = currentIncludedDocuments();
+      const total    = allDocuments.length;
+      const count    = included.size;
+
+      const summaryEl = document.getElementById('sidebarSummary');
+      if (summaryEl) {
+        summaryEl.textContent = total
+          ? `${count} of ${total} included in view`
+          : '';
+      }
+
+      if (!total) {
+        sidebarDocsList.innerHTML = `
+          <div class="sidebar-empty">
+            <span class="big">📄</span>
+            No indexed documents for this dataset yet.<br>
+            <small>Upload a PDF to get started.</small>
+          </div>`;
+        return;
+      }
+
+      sidebarDocsList.innerHTML = allDocuments.map(doc => {
+        const isIncluded = included.has(doc.selection_key);
+        const hasSnap    = Boolean(doc.prompt_audit_run_id);
+
+        let badgeClass = 'unknown-prompt';
+        let badgeLabel = 'No record';
+        if (hasSnap) {
+          if (doc.prompt_audit_auto_tune_on_upload) {
+            badgeClass = 'auto-tuned-prompt';
+            badgeLabel = 'Auto-Tuned';
+          } else {
+            badgeClass = 'default-prompt';
+            badgeLabel = 'Default';
+          }
+        }
+
+        const statParts = [];
+        if (doc.entity_count) statParts.push(`${doc.entity_count} entities`);
+        if (doc.text_units)   statParts.push(`${doc.text_units} units`);
+        if (doc.characters)   statParts.push(`${(doc.characters / 1000).toFixed(0)}k chars`);
+
+        const promptsBtn = hasSnap
+          ? `<button class="sdc-prompts-btn" data-doc-prompt="${esc(doc.selection_key)}">View Prompts →</button>`
+          : `<div class="sdc-no-snapshot">No prompt snapshot yet — re-upload to record</div>`;
+
+        return `
+          <div class="sidebar-doc-card${isIncluded ? ' included' : ''}">
+            <div class="sdc-check-row">
+              <label class="sdc-check-label" title="Include this document in the explorer view">
+                <input type="checkbox" class="sdc-check" data-doc-key="${esc(doc.selection_key)}" ${isIncluded ? 'checked' : ''} />
+                <span class="sdc-title">${esc(doc.title || 'Untitled document')}</span>
+              </label>
+              <span class="prompt-mode-badge ${badgeClass}">${esc(badgeLabel)}</span>
+            </div>
+            ${statParts.length ? `<div class="sdc-stats">${statParts.map(s => `<span class="sdc-stat">${esc(s)}</span>`).join('')}</div>` : ''}
+            ${promptsBtn}
+          </div>`;
+      }).join('');
+
+      sidebarDocsList.querySelectorAll('.sdc-check').forEach(input => {
+        input.addEventListener('change', () => {
+          const next = new Set(currentIncludedDocuments());
+          const key  = input.dataset.docKey;
+          if (input.checked) next.add(key); else next.delete(key);
+          setIncludedDocuments(next);
+        });
+      });
+
+      sidebarDocsList.querySelectorAll('[data-doc-prompt]').forEach(btn => {
+        btn.addEventListener('click', () => loadDocumentPromptAudit(btn.dataset.docPrompt));
+      });
+    }
+
+    /* ── Document filter logic ───────────────────────────────────── */
+    function syncIncludedDocuments() {
+      const availableKeys = allDocuments.map(d => d.selection_key);
+      const current = includedDocumentsByMode[activeViewMode];
+      const known   = knownDocumentsByMode[activeViewMode] || new Set();
+      if (!current) {
+        includedDocumentsByMode[activeViewMode] = new Set(availableKeys);
+      } else {
+        const next = new Set();
+        availableKeys.forEach(k => { if (!known.has(k) || current.has(k)) next.add(k); });
+        includedDocumentsByMode[activeViewMode] = next;
+      }
+      knownDocumentsByMode[activeViewMode] = new Set(availableKeys);
+    }
+
+    function currentIncludedDocuments() {
+      return includedDocumentsByMode[activeViewMode] || new Set();
+    }
+
+    function isDocumentVisible(docKeys) {
+      if (!allDocuments.length) return true;
+      const included = currentIncludedDocuments();
+      if (!docKeys || !docKeys.length) return included.size === allDocuments.length;
+      return docKeys.some(k => included.has(k));
+    }
+
+    function applyDocumentFilters() {
+      filterEntities(); filterRelationships(); filterClaims(); filterCommunities();
+      if (umapLoaded) renderUmap();
+      renderSidebar();
+      updateModeMetaChips();
+    }
+
+    function setIncludedDocuments(nextKeys) {
+      includedDocumentsByMode[activeViewMode] = new Set(nextKeys);
+      applyDocumentFilters();
+    }
+
+    document.getElementById('selectAllDocsBtn').addEventListener('click', () =>
+      setIncludedDocuments(new Set(allDocuments.map(d => d.selection_key)))
+    );
+    document.getElementById('clearDocsBtn').addEventListener('click', () =>
+      setIncludedDocuments(new Set())
+    );
+
+    /* ── Modal open/close ────────────────────────────────────────── */
+    openPromptLibraryBtn.addEventListener('click', () => openPromptLibrary(activeViewMode));
+    document.getElementById('openUploadModal').addEventListener('click', () => {
+      setUploadMode(activeViewMode);
+      if (!pipeline_running && !logBox.childElementCount) logPanel.classList.add('hidden');
+      uploadModal.classList.add('open');
+    });
+
+    document.getElementById('closeModal').addEventListener('click', closeUploadModal);
+    document.getElementById('closePromptLibraryModal').addEventListener('click', () => promptLibraryModal.classList.remove('open'));
+    document.getElementById('closeDocumentPromptModal').addEventListener('click', () => {
+      activeDocumentPromptDocumentKey = '';
+      documentPromptModal.classList.remove('open');
+    });
+
+    uploadModal.addEventListener('click', e => { if (e.target === uploadModal) closeUploadModal(); });
+    promptLibraryModal.addEventListener('click', e => { if (e.target === promptLibraryModal) promptLibraryModal.classList.remove('open'); });
+    documentPromptModal.addEventListener('click', e => { if (e.target === documentPromptModal) { activeDocumentPromptDocumentKey=''; documentPromptModal.classList.remove('open'); } });
+
+    function closeUploadModal() {
+      if (pipeline_running) return;
+      uploadModal.classList.remove('open');
+    }
+
+    function setModeControlsDisabled(disabled) {
+      viewModeButtons.forEach(btn => { btn.disabled = disabled; });
+      uploadModeCardEls.forEach(card => {
+        card.style.pointerEvents = disabled ? 'none' : '';
+        card.style.opacity = disabled ? '0.5' : '';
+      });
+      openUploadModalBtn.disabled   = disabled;
+      openPromptLibraryBtn.disabled = disabled;
+      syncNeo4jBtn.disabled         = disabled;
+      if (toggleAdvancedTuningBtn) toggleAdvancedTuningBtn.disabled = disabled;
+    }
+
+    toggleAdvancedTuningBtn.addEventListener('click', () => {
+      advancedTuneFields.classList.toggle('hidden');
+      toggleAdvancedTuningBtn.textContent = advancedTuneFields.classList.contains('hidden')
+        ? 'Advanced' : 'Hide Advanced';
+    });
+
+    promptPreviewSelect.addEventListener('change', () =>
+      loadPromptPreview(activePromptLibraryMode, promptPreviewSelect.value)
+    );
+    documentPromptSelect.addEventListener('change', () => {
+      if (!activeDocumentPromptDocumentKey) return;
+      loadDocumentPromptAudit(activeDocumentPromptDocumentKey, documentPromptSelect.value);
+    });
+
+    /* ── Initialize ──────────────────────────────────────────────── */
+    updateUploadModeHint();
+    updateAutoTunePanel();
+    updateViewModeButtons();
+    updateSidebarModeInfo();
+
+    /* ── File drop/select ────────────────────────────────────────── */
+    const dropZone   = document.getElementById('dropZone');
+    const fileInput  = document.getElementById('fileInput');
+    const uploadBtn  = document.getElementById('uploadBtn');
     const fileNameEl = document.getElementById('modalFileName');
     let selectedFile = null;
 
     document.getElementById('browseBtn').addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', () => handleFile(fileInput.files[0]));
-    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
     dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
     dropZone.addEventListener('drop', e => {
       e.preventDefault(); dropZone.classList.remove('drag-over');
@@ -277,69 +987,106 @@
       uploadBtn.disabled = false;
     }
 
-    /* ── Upload ────────────────────────────────────────────────────── */
-    let pipeline_running = false;
-
+    /* ── Upload ──────────────────────────────────────────────────── */
     uploadBtn.addEventListener('click', async () => {
       if (!selectedFile) return;
-      uploadBtn.disabled = true;
-      pipeline_running = true;
-      document.getElementById('logBox').innerHTML = '';
-      document.getElementById('logBox').style.display = 'block';
+      const uploadMode = getSelectedUploadMode();
+      uploadBtn.disabled  = true;
+      pipeline_running    = true;
+      pendingPipelineMode = uploadMode;
+      pendingTaskReload   = true;
+      setModeControlsDisabled(true);
+      logBox.innerHTML = '';
+      logPanel.classList.remove('hidden');
+
       const fd = new FormData();
       fd.append('pdf', selectedFile);
-      const res = await fetch('/upload', { method: 'POST', body: fd });
+      fd.append('mode', uploadMode);
+      const uploadInfo = MODE_OPTIONS[uploadMode];
+      if (uploadInfo && uploadInfo.uses_auto_prompts && uploadInfo.auto_tune_on_upload) {
+        Object.entries(buildAutoTunePayload()).forEach(([k, v]) => { if (v !== '') fd.append(k, v); });
+      }
+
+      const res  = await fetch('/upload', { method: 'POST', body: fd });
       const json = await res.json();
       if (json.error) {
         alert(json.error);
         uploadBtn.disabled = false;
+        pipeline_running   = false;
+        setModeControlsDisabled(false);
+        updateAutoTunePanel();
+        return;
+      }
+      pendingPipelineMode = json.mode || uploadMode;
+      startPolling();
+    });
+
+    syncNeo4jBtn.addEventListener('click', async () => {
+      if (pipeline_running) return;
+      pipeline_running    = true;
+      pendingPipelineMode = activeViewMode;
+      pendingTaskReload   = false;
+      setModeControlsDisabled(true);
+      const res  = await fetch(`/api/neo4j/sync?mode=${encodeURIComponent(activeViewMode)}`, { method: 'POST' });
+      const json = await res.json();
+      if (json.error) {
+        alert(json.error);
         pipeline_running = false;
+        setModeControlsDisabled(false);
         return;
       }
       startPolling();
     });
 
-    /* ── Status polling ────────────────────────────────────────────── */
-    let pollTimer = null;
+    /* ── Status polling ──────────────────────────────────────────── */
+    let pollTimer  = null;
     let lastLogLen = 0;
 
     function startPolling() {
       clearInterval(pollTimer);
       lastLogLen = 0;
-      pollTimer = setInterval(pollStatus, 1500);
+      pollTimer  = setInterval(pollStatus, 1500);
       pollStatus();
     }
 
     async function pollStatus() {
-      const res = await fetch('/api/status');
+      const res  = await fetch('/api/status');
       const data = await res.json();
       updateStatusUI(data);
       if (data.status === 'done') {
         clearInterval(pollTimer);
         pipeline_running = false;
-        uploadBtn.disabled = false;
-        loadData();
+        uploadBtn.disabled = !selectedFile;
+        setModeControlsDisabled(false);
+        updateAutoTunePanel();
+        await setViewMode(data.mode || pendingPipelineMode, { reload: pendingTaskReload });
       } else if (data.status === 'error') {
         clearInterval(pollTimer);
         pipeline_running = false;
-        uploadBtn.disabled = false;
+        uploadBtn.disabled = !selectedFile;
+        setModeControlsDisabled(false);
+        updateAutoTunePanel();
+        renderSidebar();
       }
     }
 
     function updateStatusUI(data) {
-      const pill = document.getElementById('statusPill');
-      const label = document.getElementById('statusLabel');
-      const logBox = document.getElementById('logBox');
-
-      pill.className = 'status-pill ' + data.status;
+      const pill      = document.getElementById('statusPill');
+      const modePrefix = data.mode_label ? `${data.mode_label}: ` : '';
+      pill.className  = 'status-pill ' + data.status;
       const dot = data.status === 'running'
         ? '<span class="dot pulse"></span>'
         : '<span class="dot"></span>';
-      const labelMap = { idle: 'Idle', running: data.stage || 'Running…', done: 'Complete', error: 'Error' };
+      const labelMap = {
+        idle:    'Idle',
+        running: modePrefix + (data.stage || 'Running…'),
+        done:    modePrefix + 'Complete',
+        error:   modePrefix + 'Error',
+      };
       pill.innerHTML = dot + ' <span id="statusLabel">' + (labelMap[data.status] || data.status) + '</span>';
 
-      // Append new log lines
       if (data.log && data.log.length > lastLogLen) {
+        logPanel.classList.remove('hidden');
         const newLines = data.log.slice(lastLogLen);
         lastLogLen = data.log.length;
         newLines.forEach(line => {
@@ -352,78 +1099,26 @@
       }
     }
 
-    let allDocuments = [];
-
-    /* ── Load data ────────────────────────────────────────────────── */
+    /* ── Data loading ────────────────────────────────────────────── */
     async function loadData() {
       try {
-        const res = await fetch('/api/data');
+        const res  = await fetch(`/api/data?mode=${encodeURIComponent(activeViewMode)}`);
         const data = await res.json();
         if (data.error) return;
-
-        // Setup documents filter
-        allDocuments = data.documents || [];
-        const docSelect = document.getElementById('globalDocFilter');
-        // keep selected value
-        const currentDoc = docSelect.value;
-        docSelect.innerHTML = '<option value="">All Documents</option>';
-        allDocuments.forEach(doc => {
-          const opt = document.createElement('option');
-          opt.value = doc.id;
-          // use filename if title is just generic
-          let displayTitle = doc.title || 'Unknown Document';
-          if (displayTitle.length > 30) displayTitle = displayTitle.substring(0, 27) + '...';
-          opt.textContent = displayTitle;
-          docSelect.appendChild(opt);
-        });
-        if (currentDoc) docSelect.value = currentDoc;
-
+        currentModeLabel = data.mode_label || MODE_LABELS[activeViewMode];
+        allDocuments     = data.documents || [];
+        allStats         = data.stats || [];
+        syncIncludedDocuments();
+        renderSidebar();
+        updateSidebarModeInfo();
+        updateModeMetaChips();
         renderEntities(data.entities);
         renderRelationships(data.relationships);
         renderClaims(data.claims);
         renderCommunities(data.communities);
+        if (umapLoaded) await loadUmapData();
       } catch (e) { console.warn('Failed to load data:', e); }
     }
-
-    document.getElementById('globalDocFilter').addEventListener('change', () => {
-      const val = document.getElementById('globalDocFilter').value;
-      document.getElementById('deleteDocBtn').style.display = val ? 'inline-block' : 'none';
-      filterEntities();
-      filterRelationships();
-      filterClaims();
-      filterCommunities();
-      if (umapLoaded) renderUmap();
-    });
-
-    document.getElementById('deleteDocBtn').addEventListener('click', async () => {
-      const docId = document.getElementById('globalDocFilter').value;
-      if (!docId) return;
-      if (!confirm("Remove this document's input file? You'll need to re-run the pipeline to update the graph data.")) return;
-
-      const btn = document.getElementById('deleteDocBtn');
-      btn.disabled = true;
-      btn.textContent = 'Deleting...';
-
-      try {
-        const res = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
-        const json = await res.json();
-        if (json.ok) {
-          document.getElementById('globalDocFilter').value = "";
-          document.getElementById('deleteDocBtn').style.display = "none";
-          // Reload data
-          await loadData();
-        } else {
-          alert(json.error || "Failed to delete document.");
-        }
-      } catch (e) {
-        alert("Error communicating with server.");
-      } finally {
-        btn.disabled = false;
-        btn.textContent = '🗑 Delete File';
-      }
-    });
-
-    /* ── Tab counts helper ─────────────────────────────────────────── */
 
     function setCount(tabKey, n) {
       const el = document.getElementById('count-' + tabKey);
@@ -431,56 +1126,38 @@
     }
 
     /* ── Entities ─────────────────────────────────────────────────── */
-    let allEntities = [];
     function renderEntities(entities) {
       allEntities = entities || [];
-      setCount('entities', allEntities.length);
-      const empty = document.getElementById('entitiesEmpty');
+      const empty   = document.getElementById('entitiesEmpty');
       const content = document.getElementById('entitiesContent');
-      if (!allEntities.length) { empty.style.display = ''; content.style.display = 'none'; return; }
+      if (!allEntities.length) { setCount('entities',0); empty.style.display=''; content.style.display='none'; return; }
       empty.style.display = 'none'; content.style.display = 'block';
-
-      // Populate type filter
       const typeFilter = document.getElementById('typeFilter');
       const types = [...new Set(allEntities.map(e => e.type))].filter(Boolean).sort();
       typeFilter.innerHTML = '<option value="">All Types</option>';
-      types.forEach(t => {
-        const opt = document.createElement('option');
-        opt.value = t;
-        opt.textContent = t;
-        typeFilter.appendChild(opt);
-      });
-
-      drawEntityTable(allEntities);
+      types.forEach(t => { const o=document.createElement('option'); o.value=t; o.textContent=t; typeFilter.appendChild(o); });
+      filterEntities();
     }
+
     function drawEntityTable(list) {
       const tbody = document.getElementById('entityBody');
       tbody.innerHTML = '';
+      if (!list.length) { tbody.innerHTML='<tr><td colspan="5" class="table-empty">No entities match the current filter.</td></tr>'; return; }
       list.forEach(e => {
         const tr = document.createElement('tr');
-        const type = (e.type || '').toLowerCase();
-        tr.innerHTML = `
-      <td style="font-weight:600;">${esc(e.name)}</td>
-      <td><span class="badge ${type}">${esc(e.type || '—')}</span></td>
-      <td>${e.degree ?? '—'}</td>
-      <td style="color:var(--text-muted);">${e.frequency ?? '—'}</td>
-      <td style="color:var(--text-muted);font-size:0.78rem;">${esc(e.description || '')}</td>`;
+        const type = (e.type||'').toLowerCase();
+        tr.innerHTML=`<td style="font-weight:600;">${esc(e.name)}</td><td><span class="badge ${type}">${esc(e.type||'—')}</span></td><td>${e.degree??'—'}</td><td style="color:var(--text-muted);">${e.frequency??'—'}</td><td style="color:var(--text-muted);font-size:0.78rem;">${esc(e.description||'')}</td>`;
         tbody.appendChild(tr);
       });
     }
 
     function filterEntities() {
       const q = document.getElementById('entitySearch').value.toLowerCase();
-      const typeSelection = document.getElementById('typeFilter').value;
-      const docSelection = document.getElementById('globalDocFilter').value;
-
-      const filtered = allEntities.filter(e => {
-        const matchesSearch = (e.name || '').toLowerCase().includes(q) || (e.description || '').toLowerCase().includes(q);
-        const matchesType = !typeSelection || e.type === typeSelection;
-        const matchesDoc = !docSelection || (e.document_ids && e.document_ids.includes(docSelection));
-        return matchesSearch && matchesType && matchesDoc;
-      });
-
+      const t = document.getElementById('typeFilter').value;
+      const filtered = allEntities.filter(e =>
+        ((e.name||'').toLowerCase().includes(q)||(e.description||'').toLowerCase().includes(q)) &&
+        (!t||e.type===t) && isDocumentVisible(e.document_keys)
+      );
       setCount('entities', filtered.length);
       drawEntityTable(filtered);
     }
@@ -489,57 +1166,36 @@
     document.getElementById('typeFilter').addEventListener('change', filterEntities);
 
     /* ── Relationships ────────────────────────────────────────────── */
-    let allRels = [];
     function renderRelationships(rels) {
       allRels = rels || [];
-      setCount('relationships', allRels.length);
-      const empty = document.getElementById('relsEmpty');
+      const empty   = document.getElementById('relsEmpty');
       const content = document.getElementById('relsContent');
-      if (!allRels.length) { empty.style.display = ''; content.style.display = 'none'; return; }
-      empty.style.display = 'none'; content.style.display = 'block';
-      drawRelList(allRels);
+      if (!allRels.length) { setCount('relationships',0); empty.style.display=''; content.style.display='none'; return; }
+      empty.style.display='none'; content.style.display='block';
+      filterRelationships();
     }
+
     function drawRelList(list) {
       const el = document.getElementById('relList');
       el.innerHTML = '';
+      if (!list.length) { el.innerHTML='<div class="empty compact">No relationships match the current filter.</div>'; return; }
       list.forEach(r => {
         const div = document.createElement('div');
         div.className = 'rel-row';
         const wt = r.weight ? r.weight.toFixed(1) : null;
         const wtBadge = wt ? `<span style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;font-size:.7rem;padding:1px 7px;color:var(--text-muted);margin-right:6px;white-space:nowrap;">w: ${wt}</span>` : '';
-        div.innerHTML = `
-      <div class="rel-source">${esc(r.source)}</div>
-      <div class="rel-arrow">→</div>
-      <div class="rel-target">${esc(r.target)}</div>
-      <div class="rel-desc">${wtBadge}${esc(r.description || '')}</div>`;
+        div.innerHTML=`<div class="rel-source">${esc(r.source)}</div><div class="rel-arrow">→</div><div class="rel-target">${esc(r.target)}</div><div class="rel-desc">${wtBadge}${esc(r.description||'')}</div>`;
         el.appendChild(div);
       });
     }
+
     function filterRelationships() {
       const q = document.getElementById('relSearch').value.toLowerCase();
-      const docSelection = document.getElementById('globalDocFilter').value;
-
-      // To verify relations correctly we'd map relation -> documents.
-      // For UI responsiveness, since we didn't fetch documents for edges, 
-      // we could check if either source or target matches the doc filter.
-      // This is a rough filter purely on the UI side.
-      let activeEntities = new Set();
-      if (docSelection) {
-        allEntities.forEach(e => {
-          if (e.document_ids && e.document_ids.includes(docSelection)) {
-            activeEntities.add(e.name);
-          }
-        });
-      }
-
-      const filtered = allRels.filter(r => {
-        const matchesSearch = (r.source || '').toLowerCase().includes(q) ||
-          (r.target || '').toLowerCase().includes(q) ||
-          (r.description || '').toLowerCase().includes(q);
-        const matchesDoc = !docSelection || activeEntities.has(r.source) || activeEntities.has(r.target);
-        return matchesSearch && matchesDoc;
-      });
-
+      const activeEnts = new Set(allEntities.filter(e=>isDocumentVisible(e.document_keys)).map(e=>e.name));
+      const filtered = allRels.filter(r =>
+        ((r.source||'').toLowerCase().includes(q)||(r.target||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q)) &&
+        (activeEnts.has(r.source)||activeEnts.has(r.target))
+      );
       setCount('relationships', filtered.length);
       drawRelList(filtered);
     }
@@ -547,90 +1203,51 @@
     document.getElementById('relSearch').addEventListener('input', filterRelationships);
 
     /* ── Claims ───────────────────────────────────────────────────── */
-    let allClaims = [];
     function renderClaims(claims) {
       allClaims = claims || [];
-      setCount('claims', allClaims.length);
-      const empty = document.getElementById('claimsEmpty');
+      const empty   = document.getElementById('claimsEmpty');
       const content = document.getElementById('claimsContent');
-      if (!allClaims.length) { empty.style.display = ''; content.style.display = 'none'; return; }
-      empty.style.display = 'none'; content.style.display = 'block';
-
-      // Populate type filter
-      const typeFilter = document.getElementById('claimTypeFilter');
-      const curType = typeFilter.value;
-      const types = [...new Set(allClaims.map(c => c.type).filter(Boolean))].sort();
-      typeFilter.innerHTML = '<option value="">All Types</option>';
-      types.forEach(t => {
-        const opt = document.createElement('option');
-        opt.value = t;
-        opt.textContent = t.charAt(0) + t.slice(1).toLowerCase().replace(/_/g, ' ');
-        typeFilter.appendChild(opt);
-      });
-      if (curType) typeFilter.value = curType;
-
-      // Populate status filter
-      const statusFilter = document.getElementById('claimStatusFilter');
-      const curStatus = statusFilter.value;
-      const statuses = [...new Set(allClaims.map(c => c.status).filter(Boolean))].sort();
-      statusFilter.innerHTML = '<option value="">All Statuses</option>';
-      statuses.forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s;
-        opt.textContent = s.charAt(0) + s.slice(1).toLowerCase();
-        statusFilter.appendChild(opt);
-      });
-      if (curStatus) statusFilter.value = curStatus;
-
+      if (!allClaims.length) { setCount('claims',0); empty.style.display=''; content.style.display='none'; return; }
+      empty.style.display='none'; content.style.display='block';
+      const tf=document.getElementById('claimTypeFilter'); const ctv=tf.value;
+      const types=[...new Set(allClaims.map(c=>c.type).filter(Boolean))].sort();
+      tf.innerHTML='<option value="">All Types</option>';
+      types.forEach(t=>{const o=document.createElement('option');o.value=t;o.textContent=t.charAt(0)+t.slice(1).toLowerCase().replace(/_/g,' ');tf.appendChild(o);});
+      if(ctv)tf.value=ctv;
+      const sf=document.getElementById('claimStatusFilter'); const csv=sf.value;
+      const statuses=[...new Set(allClaims.map(c=>c.status).filter(Boolean))].sort();
+      sf.innerHTML='<option value="">All Statuses</option>';
+      statuses.forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent=s.charAt(0)+s.slice(1).toLowerCase();sf.appendChild(o);});
+      if(csv)sf.value=csv;
       filterClaims();
     }
 
     function drawClaimTable(list) {
       const tbody = document.getElementById('claimBody');
-      tbody.innerHTML = '';
-      list.forEach(c => {
-        const tr = document.createElement('tr');
-        const status = (c.status || '').toLowerCase();
-        const statusClass = status ? `status-${status}` : '';
-        const type = (c.type || '').toLowerCase().replace(/_/g, ' ');
-        let dateStr = '';
-        if (c.start_date && c.end_date && c.start_date === c.end_date) {
-          dateStr = c.start_date;
-        } else if (c.start_date && c.end_date) {
-          dateStr = `${c.start_date} – ${c.end_date}`;
-        } else if (c.start_date) {
-          dateStr = c.start_date;
-        }
-        tr.innerHTML = `
-      <td style="font-weight:600;">${esc(c.subject || '—')}</td>
-      <td>${esc(!c.object || c.object.toUpperCase() === 'NONE' ? '—' : c.object)}</td>
-      <td><span class="badge claim-type">${esc(type || '—')}</span></td>
-      <td style="color:var(--text-muted);font-size:0.75rem;white-space:nowrap;">${esc(dateStr)}</td>
-      <td><span class="badge ${statusClass}">${esc(c.status || '—')}</span></td>
-      <td style="color:var(--text-muted);font-size:0.78rem;">${esc(c.description || '')}</td>`;
+      tbody.innerHTML='';
+      if(!list.length){tbody.innerHTML='<tr><td colspan="6" class="table-empty">No claims match the current filter.</td></tr>';return;}
+      list.forEach(c=>{
+        const tr=document.createElement('tr');
+        const status=(c.status||'').toLowerCase(); const sc=status?`status-${status}`:'';
+        const type=(c.type||'').toLowerCase().replace(/_/g,' ');
+        let dateStr='';
+        if(c.start_date&&c.end_date&&c.start_date===c.end_date)dateStr=c.start_date;
+        else if(c.start_date&&c.end_date)dateStr=`${c.start_date} – ${c.end_date}`;
+        else if(c.start_date)dateStr=c.start_date;
+        tr.innerHTML=`<td style="font-weight:600;">${esc(c.subject||'—')}</td><td>${esc(!c.object||c.object.toUpperCase()==='NONE'?'—':c.object)}</td><td><span class="badge claim-type">${esc(type||'—')}</span></td><td style="color:var(--text-muted);font-size:0.75rem;white-space:nowrap;">${esc(dateStr)}</td><td><span class="badge ${sc}">${esc(c.status||'—')}</span></td><td style="color:var(--text-muted);font-size:0.78rem;">${esc(c.description||'')}</td>`;
         tbody.appendChild(tr);
       });
     }
 
     function filterClaims() {
-      const q = document.getElementById('claimSearch').value.toLowerCase();
-      const typeSelection = document.getElementById('claimTypeFilter').value;
-      const statusSel = document.getElementById('claimStatusFilter').value;
-      const docSelection = document.getElementById('globalDocFilter').value;
-
-      const filtered = allClaims.filter(c => {
-        const matchesSearch = !q ||
-          (c.type || '').toLowerCase().includes(q) ||
-          (c.description || '').toLowerCase().includes(q) ||
-          (c.subject || '').toLowerCase().includes(q) ||
-          (c.object && c.object.toUpperCase() !== 'NONE' ? c.object.toLowerCase().includes(q) : false);
-        const matchesType = !typeSelection || c.type === typeSelection;
-        const matchesStatus = !statusSel || c.status === statusSel;
-        const matchesDoc = !docSelection || c.document_id === docSelection;
-        return matchesSearch && matchesType && matchesStatus && matchesDoc;
-      });
-
-      setCount('claims', filtered.length);
+      const q=document.getElementById('claimSearch').value.toLowerCase();
+      const ts=document.getElementById('claimTypeFilter').value;
+      const ss=document.getElementById('claimStatusFilter').value;
+      const filtered=allClaims.filter(c=>
+        (!q||(c.type||'').toLowerCase().includes(q)||(c.description||'').toLowerCase().includes(q)||(c.subject||'').toLowerCase().includes(q)||(c.object&&c.object.toUpperCase()!=='NONE'?c.object.toLowerCase().includes(q):false))&&
+        (!ts||c.type===ts)&&(!ss||c.status===ss)&&isDocumentVisible(c.document_key?[c.document_key]:[])
+      );
+      setCount('claims',filtered.length);
       drawClaimTable(filtered);
     }
 
@@ -639,417 +1256,206 @@
     document.getElementById('claimStatusFilter').addEventListener('change', filterClaims);
 
     /* ── Communities ──────────────────────────────────────────────── */
-    let allCommunities = [];
-
-    function renderCommunities(communities) {
-      allCommunities = communities || [];
-      filterCommunities();
-    }
+    function renderCommunities(communities) { allCommunities=communities||[]; filterCommunities(); }
 
     function filterCommunities() {
-      const docSelection = document.getElementById('globalDocFilter').value;
-      const q = document.getElementById('commSearch').value.toLowerCase();
-
-      let activeEntities = new Set();
-      if (docSelection) {
-        allEntities.forEach(e => {
-          if (e.document_ids && e.document_ids.includes(docSelection)) {
-            activeEntities.add(e.id);
-          }
-        });
-      }
-
-      const filtered = allCommunities.filter(c => {
-        const matchesDoc = !docSelection || (c.entities || []).some(ent => activeEntities.has(ent.id));
-        const matchesSearch = !q ||
-          (c.report_title || '').toLowerCase().includes(q) ||
-          (c.base_title || '').toLowerCase().includes(q) ||
-          (c.summary || '').toLowerCase().includes(q);
-        return matchesDoc && matchesSearch;
-      });
-
-      setCount('communities', filtered.length);
+      const q=document.getElementById('commSearch').value.toLowerCase();
+      const activeEnts=new Set(allEntities.filter(e=>isDocumentVisible(e.document_keys)).map(e=>e.id));
+      const filtered=allCommunities.filter(c=>
+        (c.entities||[]).some(e=>activeEnts.has(e.id))&&
+        (!q||(c.report_title||'').toLowerCase().includes(q)||(c.base_title||'').toLowerCase().includes(q)||(c.summary||'').toLowerCase().includes(q))
+      );
+      setCount('communities',filtered.length);
       drawCommunityGrid(filtered);
     }
 
     function drawCommunityGrid(list) {
-      const empty = document.getElementById('commEmpty');
-      const content = document.getElementById('commContent');
-      const grid = document.getElementById('commList');
-      if (!list.length) { empty.style.display = ''; content.style.display = 'none'; return; }
-      empty.style.display = 'none'; content.style.display = 'block';
-      grid.innerHTML = '';
-
-      list.forEach(c => {
-        const card = document.createElement('div');
-        card.className = 'comm-card';
-        const entities = c.entities || [];
-
-        const chips = entities.map(e => {
-          const type = (e.type || '').toLowerCase();
-          return `<span class="entity-chip ${type}">${esc(e.name)}</span>`;
-        }).join('');
-
-        const summary = c.summary ? `<p class="comm-summary">${esc(c.summary)}</p>` : '';
-
-        const rank = typeof c.rank === 'number' ? c.rank : 0;
-        const rankClass = rank >= 8 ? 'rank-high' : rank >= 6 ? 'rank-mid' : 'rank-low';
-
-        const findingsEl = c.findings_count > 0
-          ? `<div class="comm-findings">📋 ${c.findings_count} findings</div>`
-          : '';
-
-        card.innerHTML = `
-      <div class="comm-header">
-        <span class="comm-number">${esc(c.base_title)}</span>
-        <div class="comm-title">${esc(c.report_title || c.base_title)}</div>
-        <span class="comm-rank ${rankClass}" title="Quality rank (0–10)">${rank.toFixed(1)}</span>
-        <div class="comm-meta">Level ${c.level ?? '?'} · ${entities.length} entities</div>
-        <div class="comm-arrow">▼</div>
-      </div>
-      <div class="comm-body">
-        ${summary}
-        ${findingsEl}
-        <div class="entity-chips">${chips || '<span style="color:var(--text-muted);font-size:.8rem;">No entities</span>'}</div>
-      </div>`;
-        card.querySelector('.comm-header').addEventListener('click', () => card.classList.toggle('open'));
+      const empty=document.getElementById('commEmpty'); const content=document.getElementById('commContent'); const grid=document.getElementById('commList');
+      if(!list.length){if(!allCommunities.length){empty.style.display='';content.style.display='none';return;}empty.style.display='none';content.style.display='block';grid.innerHTML='<div class="empty compact">No communities match the current filter.</div>';return;}
+      empty.style.display='none';content.style.display='block';grid.innerHTML='';
+      list.forEach(c=>{
+        const card=document.createElement('div');card.className='comm-card';
+        const entities=c.entities||[];
+        const chips=entities.map(e=>`<span class="entity-chip ${(e.type||'').toLowerCase()}">${esc(e.name)}</span>`).join('');
+        const summary=c.summary?`<p class="comm-summary">${esc(c.summary)}</p>`:'';
+        const rank=typeof c.rank==='number'?c.rank:0;
+        const rc=rank>=8?'rank-high':rank>=6?'rank-mid':'rank-low';
+        const fe=c.findings_count>0?`<div class="comm-findings">📋 ${c.findings_count} findings</div>`:'';
+        card.innerHTML=`<div class="comm-header"><span class="comm-number">${esc(c.base_title)}</span><div class="comm-title">${esc(c.report_title||c.base_title)}</div><span class="comm-rank ${rc}" title="Quality rank (0–10)">${rank.toFixed(1)}</span><div class="comm-meta">Level ${c.level??'?'} · ${entities.length} entities</div><div class="comm-arrow">▼</div></div><div class="comm-body">${summary}${fe}<div class="entity-chips">${chips||'<span style="color:var(--text-muted);font-size:.8rem;">No entities</span>'}</div></div>`;
+        card.querySelector('.comm-header').addEventListener('click',()=>card.classList.toggle('open'));
         grid.appendChild(card);
       });
     }
 
     document.getElementById('commSearch').addEventListener('input', filterCommunities);
 
-    /* ── Utils ────────────────────────────────────────────────────── */
-    function esc(str) {
-      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-
     /* Auto-load on page open */
     loadData();
 
-    /* ── UMAP Visualization ─────────────────────────────────────────── */
-
+    /* ── UMAP Visualization ──────────────────────────────────────── */
     const TYPE_COLORS = {
-      geo: '#22c55e',   // badge.geo
-      person: '#fbbf24',   // badge.person
-      organization: '#a78bfa',   // badge.organization
-      event: '#f87171',   // badge.event
-      product: '#22d3ee',   // badge.product
-      technology: '#f59e0b',   // badge.technology (--warning)
-      religion: '#fb923c',
-      institution: '#38bdf8',
-      ideology: '#e879f9',
-      concept: '#4ade80',
-      sect: '#f43f5e',
-      document: '#94a3b8',
-      text: '#cbd5e1',
+      geo:'#22c55e', person:'#fbbf24', organization:'#a78bfa', event:'#f87171',
+      product:'#22d3ee', technology:'#f59e0b', religion:'#fb923c', institution:'#38bdf8',
+      ideology:'#e879f9', concept:'#4ade80', sect:'#f43f5e', document:'#94a3b8', text:'#cbd5e1',
     };
-    const FALLBACK_COLOR = '#94a3b8';
-
-    // Palette for community coloring (up to 24 distinct communities)
-    const COMM_PALETTE = [
-      '#5b7ef5', '#a78bfa', '#34d399', '#fbbf24', '#f472b6', '#22d3ee',
-      '#fb7185', '#4ade80', '#facc15', '#38bdf8', '#e879f9', '#2dd4bf',
-      '#f97316', '#818cf8', '#86efac', '#fde68a', '#f9a8d4', '#67e8f9',
-      '#c084fc', '#6ee7b7', '#fcd34d', '#93c5fd', '#f0abfc', '#5eead4',
+    const FALLBACK_COLOR='#94a3b8';
+    const COMM_PALETTE=[
+      '#5b7ef5','#a78bfa','#34d399','#fbbf24','#f472b6','#22d3ee',
+      '#fb7185','#4ade80','#facc15','#38bdf8','#e879f9','#2dd4bf',
+      '#f97316','#818cf8','#86efac','#fde68a','#f9a8d4','#67e8f9',
+      '#c084fc','#6ee7b7','#fcd34d','#93c5fd','#f0abfc','#5eead4',
     ];
 
-    let umapNodes = [];
-    let umapEdges = [];
-    let umapColorMode = 'community';   // 'type' | 'community'
-    let umapCommLevel = 0;             // active community hierarchy level (0=Broad by default)
-    let umapChart = null;
+    let umapNodes=[]; let umapEdges=[]; let umapColorMode='community'; let umapCommLevel=0; let umapChart=null;
+    function nodeComm(n)      { return n[`community_l${umapCommLevel}`]??null; }
+    function nodeCommTitle(n) { return n[`community_title_l${umapCommLevel}`]||''; }
 
-    // Helpers: pick community fields for the currently selected level
-    function nodeComm(n)      { return n[`community_l${umapCommLevel}`] ?? null; }
-    function nodeCommTitle(n) { return n[`community_title_l${umapCommLevel}`] || ''; }
+    document.getElementById('colorByType').addEventListener('click',()=>setColorMode('type'));
+    document.getElementById('colorByCommunity').addEventListener('click',()=>setColorMode('community'));
+    document.getElementById('showEdges').addEventListener('change',renderUmap);
+    document.getElementById('showLabels').addEventListener('change',renderUmap);
+    document.getElementById('minDegree').addEventListener('input',function(){document.getElementById('minDegreeVal').textContent=this.value;renderUmap();});
+    document.getElementById('umapSearch').addEventListener('input',renderUmap);
+    document.getElementById('umapDetailClose').addEventListener('click',()=>document.getElementById('umapDetail').classList.add('hidden'));
 
-    document.getElementById('colorByType').addEventListener('click', () => setColorMode('type'));
-    document.getElementById('colorByCommunity').addEventListener('click', () => setColorMode('community'));
-    document.getElementById('showEdges').addEventListener('change', renderUmap);
-    document.getElementById('showLabels').addEventListener('change', renderUmap);
-    document.getElementById('minDegree').addEventListener('input', function () {
-      document.getElementById('minDegreeVal').textContent = this.value;
-      renderUmap();
-    });
-    document.getElementById('umapSearch').addEventListener('input', renderUmap);
-    document.getElementById('umapDetailClose').addEventListener('click', () => {
-      document.getElementById('umapDetail').classList.add('hidden');
-    });
-
-    // Load UMAP data when the tab is first activated
-    let umapLoaded = false;
-    document.getElementById('umapTabBtn').addEventListener('click', () => {
-      if (!umapLoaded) { umapLoaded = true; loadUmapData(); }
-      else { triggerResize(); }
-    });
-
-    // Also reload after pipeline completes
-    const _origLoadData = loadData;
-    window.loadData = async function () {
-      await _origLoadData();
-      if (umapLoaded) { await loadUmapData(); }
-    };
+    let umapLoaded=false;
+    document.getElementById('umapTabBtn').addEventListener('click',()=>{if(!umapLoaded){umapLoaded=true;loadUmapData();}else{triggerResize();}});
 
     async function loadUmapData() {
       try {
-        const res = await fetch('/api/umap');
-        const data = await res.json();
-        if (data.error || !data.nodes || !data.nodes.length) {
-          document.getElementById('umapEmpty').style.display = '';
-          document.getElementById('umapContent').style.display = 'none';
+        const res=await fetch(`/api/umap?mode=${encodeURIComponent(activeViewMode)}`);
+        const data=await res.json();
+        if(data.error||!data.nodes||!data.nodes.length){
+          umapNodes=[];umapEdges=[];setCount('umap',0);
+          document.getElementById('umapEmpty').innerHTML='<span class="big">🗺</span>No graph layout data yet.';
+          document.getElementById('umapEmpty').style.display='';
+          document.getElementById('umapContent').style.display='none';
           return;
         }
-        umapNodes = data.nodes;
-        umapEdges = data.edges;
-
-        // Annotate level buttons with unique community counts
-        const levelLabels = { 0: 'Broad', 1: 'Detailed', 2: 'Fine' };
-        const levelDesc   = {
-          0: 'root communities — broadest grouping, covers all entities',
-          1: 'sub-communities within each root — best balance of detail and coverage',
-          2: 'deepest split — finest granularity; entities with no L2 community fall back to Detailed level',
-        };
-        (data.comm_levels || []).forEach(L => {
-          const btn = document.getElementById(`commLvl${L}`);
-          if (!btn) return;
-          const unique = new Set(umapNodes.map(n => n[`community_l${L}`]).filter(v => v != null)).size;
-          btn.textContent = `${levelLabels[L] || `L${L}`} · ${unique}`;
-          btn.title = `${unique} ${levelDesc[L] || 'communities'}`;
+        umapNodes=data.nodes;umapEdges=data.edges;
+        const levelLabels={0:'Broad',1:'Detailed',2:'Fine'};
+        (data.comm_levels||[]).forEach(L=>{
+          const btn=document.getElementById(`commLvl${L}`);if(!btn)return;
+          const unique=new Set(umapNodes.map(n=>n[`community_l${L}`]).filter(v=>v!=null)).size;
+          btn.textContent=`${levelLabels[L]||`L${L}`} · ${unique}`;
+          btn.title=`${unique} communities at this level`;
         });
-
-        // Set slider max to 95th-percentile degree
-        const degrees = umapNodes.map(n => n.degree).sort((a, b) => a - b);
-        const p95 = degrees[Math.floor(degrees.length * 0.95)] || 20;
-        document.getElementById('minDegree').max = p95;
-
-        // Update UMAP count badge
-        document.getElementById('count-umap').textContent = umapNodes.length;
-
-        document.getElementById('umapEmpty').style.display = 'none';
-        document.getElementById('umapContent').style.display = 'flex';
-        document.getElementById('umapContent').style.flexDirection = 'column';
-
+        const degrees=umapNodes.map(n=>n.degree).sort((a,b)=>a-b);
+        document.getElementById('minDegree').max=degrees[Math.floor(degrees.length*.95)]||20;
+        document.getElementById('umapEmpty').style.display='none';
+        document.getElementById('umapContent').style.display='flex';
+        document.getElementById('umapContent').style.flexDirection='column';
         renderUmap();
-      } catch (e) {
-        console.warn('UMAP load failed:', e);
-      }
+      } catch(e){console.warn('UMAP load failed:',e);}
     }
 
-    function setColorMode(mode) {
-      umapColorMode = mode;
-      document.getElementById('colorByType').classList.toggle('active', mode === 'type');
-      document.getElementById('colorByCommunity').classList.toggle('active', mode === 'community');
-      document.getElementById('commLevelGroup').style.display = mode === 'community' ? '' : 'none';
+    function setColorMode(mode){
+      umapColorMode=mode;
+      document.getElementById('colorByType').classList.toggle('active',mode==='type');
+      document.getElementById('colorByCommunity').classList.toggle('active',mode==='community');
+      document.getElementById('commLevelGroup').style.display=mode==='community'?'':'none';
       renderUmap();
     }
 
-    function setCommLevel(level) {
-      umapCommLevel = level;
-      [0, 1, 2].forEach(L => {
-        const btn = document.getElementById(`commLvl${L}`);
-        if (btn) btn.classList.toggle('active', L === level);
-      });
+    function setCommLevel(level){
+      umapCommLevel=level;
+      [0,1,2].forEach(L=>{const btn=document.getElementById(`commLvl${L}`);if(btn)btn.classList.toggle('active',L===level);});
       renderUmap();
     }
 
-    document.getElementById('commLvl0').addEventListener('click', () => setCommLevel(0));
-    document.getElementById('commLvl1').addEventListener('click', () => setCommLevel(1));
-    document.getElementById('commLvl2').addEventListener('click', () => setCommLevel(2));
+    document.getElementById('commLvl0').addEventListener('click',()=>setCommLevel(0));
+    document.getElementById('commLvl1').addEventListener('click',()=>setCommLevel(1));
+    document.getElementById('commLvl2').addEventListener('click',()=>setCommLevel(2));
 
     function renderUmap() {
-      const minDeg = parseInt(document.getElementById('minDegree').value, 10) || 0;
-      const showEdges = document.getElementById('showEdges').checked;
-      const showLabels = document.getElementById('showLabels').checked;
-      const searchTerm = document.getElementById('umapSearch').value.trim().toLowerCase();
-      const docFilter = document.getElementById('globalDocFilter').value;
-
-      const visible = umapNodes.filter(n =>
-        n.degree >= minDeg &&
-        (!docFilter || (n.document_ids && n.document_ids.includes(docFilter)))
-      );
-
-      const visibleNames = new Set(visible.map(n => n.name));
-
-      // ── Edge trace ──────────────────────────────────────────────────
-      const edgeTraces = [];
-      if (showEdges) {
-        const ex = [], ey = [], et = [];
-        umapEdges.forEach(e => {
-          if (!visibleNames.has(e.source) || !visibleNames.has(e.target)) return;
-          ex.push(e.x0, e.x1, null);
-          ey.push(e.y0, e.y1, null);
-          et.push(`${e.source} → ${e.target}<br><i>${e.description || ''}</i>`, '', '');
-        });
-        edgeTraces.push({
-          type: 'scatter',
-          mode: 'lines',
-          x: ex, y: ey,
-          hoverinfo: 'none',
-          line: { color: 'rgba(100,116,139,0.25)', width: 0.8 },
-          name: 'Edges',
-          showlegend: false,
+      const minDeg=parseInt(document.getElementById('minDegree').value,10)||0;
+      const showEdges=document.getElementById('showEdges').checked;
+      const showLabels=document.getElementById('showLabels').checked;
+      const searchTerm=document.getElementById('umapSearch').value.trim().toLowerCase();
+      const visible=umapNodes.filter(n=>n.degree>=minDeg&&isDocumentVisible(n.document_keys));
+      setCount('umap',visible.length);
+      if(!visible.length){
+        document.getElementById('umapEmpty').innerHTML='<span class="big">🗺</span>No nodes match the current filter.';
+        document.getElementById('umapEmpty').style.display='';
+        document.getElementById('umapContent').style.display='none';
+        return;
+      }
+      document.getElementById('umapEmpty').style.display='none';
+      document.getElementById('umapContent').style.display='flex';
+      document.getElementById('umapContent').style.flexDirection='column';
+      const visibleNames=new Set(visible.map(n=>n.name));
+      const edgeTraces=[];
+      if(showEdges){
+        const ex=[],ey=[],et=[];
+        umapEdges.forEach(e=>{if(!visibleNames.has(e.source)||!visibleNames.has(e.target))return;ex.push(e.x0,e.x1,null);ey.push(e.y0,e.y1,null);et.push(`${e.source} → ${e.target}<br><i>${e.description||''}</i>`,'','');});
+        edgeTraces.push({type:'scatter',mode:'lines',x:ex,y:ey,hoverinfo:'none',line:{color:'rgba(100,116,139,0.25)',width:0.8},name:'Edges',showlegend:false});
+      }
+      const nodeTraces=[];
+      if(umapColorMode==='type'){
+        const byType={};
+        visible.forEach(n=>{const k=n.type||'unknown';if(!byType[k])byType[k]=[];byType[k].push(n);});
+        Object.entries(byType).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([type,nodes])=>nodeTraces.push(makeNodeTrace(nodes,type,TYPE_COLORS[type]||FALLBACK_COLOR,searchTerm,showLabels)));
+      } else {
+        const comms=[...new Set(visible.map(n=>nodeComm(n)))].sort((a,b)=>(a??999)-(b??999));
+        const ccm={};comms.forEach((c,i)=>{ccm[c]=COMM_PALETTE[i%COMM_PALETTE.length];});
+        const byComm={};
+        visible.forEach(n=>{const k=nodeComm(n)??'none';if(!byComm[k])byComm[k]=[];byComm[k].push(n);});
+        Object.entries(byComm).sort().forEach(([comm,nodes])=>{
+          const color=ccm[comm==='none'?null:parseInt(comm)]||FALLBACK_COLOR;
+          nodeTraces.push(makeNodeTrace(nodes,nodeCommTitle(nodes[0])||`Community ${comm}`,color,searchTerm,showLabels));
         });
       }
-
-      // ── Node traces (one per group for legend) ───────────────────────
-      const nodeTraces = [];
-
-      if (umapColorMode === 'type') {
-        const byType = {};
-        visible.forEach(n => {
-          const k = n.type || 'unknown';
-          if (!byType[k]) byType[k] = [];
-          byType[k].push(n);
-        });
-
-        Object.entries(byType).sort((a, b) => a[0].localeCompare(b[0])).forEach(([type, nodes]) => {
-          const color = TYPE_COLORS[type] || FALLBACK_COLOR;
-          nodeTraces.push(makeNodeTrace(nodes, type, color, searchTerm, showLabels));
-        });
-
-      } else {
-        // Color by community
-        const comms = [...new Set(visible.map(n => nodeComm(n)))].sort((a, b) => (a ?? 999) - (b ?? 999));
-        const commColorMap = {};
-        comms.forEach((c, i) => { commColorMap[c] = COMM_PALETTE[i % COMM_PALETTE.length]; });
-
-        const byComm = {};
-        visible.forEach(n => {
-          const k = nodeComm(n) ?? 'none';
-          if (!byComm[k]) byComm[k] = [];
-          byComm[k].push(n);
-        });
-
-        Object.entries(byComm).sort().forEach(([comm, nodes]) => {
-          const color = commColorMap[comm === 'none' ? null : parseInt(comm)] || FALLBACK_COLOR;
-          const label = nodeCommTitle(nodes[0]) || `Community ${comm}`;
-          nodeTraces.push(makeNodeTrace(nodes, label, color, searchTerm, showLabels));
-        });
-      }
-
-      const allTraces = [...edgeTraces, ...nodeTraces];
-
-      const layout = {
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: '#e2e8f0', family: 'Inter, sans-serif', size: 12 },
-        margin: { t: 12, r: 12, b: 40, l: 40 },
-        xaxis: {
-          showgrid: true, gridcolor: 'rgba(255,255,255,0.05)', zeroline: false,
-          tickfont: { color: '#8892a4', size: 10 }, showticklabels: true,
-          title: { text: 'UMAP-1', font: { color: '#8892a4', size: 11 } },
-        },
-        yaxis: {
-          showgrid: true, gridcolor: 'rgba(255,255,255,0.05)', zeroline: false,
-          tickfont: { color: '#8892a4', size: 10 }, showticklabels: true,
-          title: { text: 'UMAP-2', font: { color: '#8892a4', size: 11 } },
-        },
-        legend: {
-          bgcolor: 'rgba(26,29,39,0.7)',
-          bordercolor: 'rgba(255,255,255,0.05)', borderwidth: 1,
-          font: { color: '#e2e8f0', size: 11 },
-          itemsizing: 'constant',
-          x: 1.01, y: 1, xanchor: 'left', yanchor: 'top',
-        },
-        hovermode: 'closest',
-        hoverlabel: {
-          bgcolor: '#1a1d27', bordercolor: 'rgba(255,255,255,0.08)',
-          font: { color: '#e2e8f0', size: 12, family: 'Inter, sans-serif' },
-          align: 'left',
-        },
-        dragmode: 'pan',
+      const layout={
+        paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',
+        font:{color:'#e2e8f0',family:'Inter, sans-serif',size:12},
+        margin:{t:12,r:12,b:40,l:40},
+        xaxis:{showgrid:true,gridcolor:'rgba(255,255,255,0.05)',zeroline:false,tickfont:{color:'#8892a4',size:10},title:{text:'UMAP-1',font:{color:'#8892a4',size:11}}},
+        yaxis:{showgrid:true,gridcolor:'rgba(255,255,255,0.05)',zeroline:false,tickfont:{color:'#8892a4',size:10},title:{text:'UMAP-2',font:{color:'#8892a4',size:11}}},
+        legend:{bgcolor:'rgba(26,29,39,0.7)',bordercolor:'rgba(255,255,255,0.05)',borderwidth:1,font:{color:'#e2e8f0',size:11},itemsizing:'constant',x:1.01,y:1,xanchor:'left',yanchor:'top'},
+        hovermode:'closest',hoverlabel:{bgcolor:'#1a1d27',bordercolor:'rgba(255,255,255,0.08)',font:{color:'#e2e8f0',size:12,family:'Inter, sans-serif'},align:'left'},
+        dragmode:'pan',
       };
-
-      const config = {
-        responsive: true,
-        scrollZoom: true,
-        displayModeBar: true,
-        modeBarButtonsToRemove: ['select2d', 'lasso2d', 'autoScale2d', 'hoverClosestCartesian', 'hoverCompareCartesian'],
-        displaylogo: false,
-        toImageButtonOptions: { format: 'png', scale: 2 },
-      };
-
-      const chartEl = document.getElementById('umapChart');
-      if (!umapChart) {
-        Plotly.newPlot(chartEl, allTraces, layout, config);
-        umapChart = chartEl;
-
-        // Click handler — show detail panel
-        chartEl.on('plotly_click', data => {
-          const pt = data.points[0];
-          if (!pt || pt.data.mode === 'lines') return;
-          const nodeName = pt.text || (pt.data.text && pt.data.text[pt.pointIndex !== undefined ? pt.pointIndex : pt.pointNumber]);
-          const node = umapNodes.find(n => n.name === nodeName);
-          if (node) showUmapDetail(node);
+      const config={responsive:true,scrollZoom:true,displayModeBar:true,modeBarButtonsToRemove:['select2d','lasso2d','autoScale2d','hoverClosestCartesian','hoverCompareCartesian'],displaylogo:false,toImageButtonOptions:{format:'png',scale:2}};
+      const chartEl=document.getElementById('umapChart');
+      if(!umapChart){
+        Plotly.newPlot(chartEl,allTraces=[...edgeTraces,...nodeTraces],layout,config);
+        umapChart=chartEl;
+        chartEl.on('plotly_click',data=>{
+          const pt=data.points[0];if(!pt||pt.data.mode==='lines')return;
+          const nodeName=pt.text||(pt.data.text&&pt.data.text[pt.pointIndex!==undefined?pt.pointIndex:pt.pointNumber]);
+          const node=umapNodes.find(n=>n.name===nodeName);if(node)showUmapDetail(node);
         });
       } else {
-        Plotly.react(chartEl, allTraces, layout, config);
+        Plotly.react(chartEl,[...edgeTraces,...nodeTraces],layout,config);
       }
     }
 
-    function makeNodeTrace(nodes, label, color, searchTerm, showLabels) {
-      const xs = [], ys = [], texts = [], sizes = [], opacities = [], hovers = [];
-
-      nodes.forEach(n => {
-        xs.push(n.x);
-        ys.push(n.y);
-        texts.push(n.name);
-        // Size: proportional to degree, clamped
-        const sz = Math.max(5, Math.min(22, 5 + Math.sqrt(n.degree) * 2.5));
-        sizes.push(sz);
-
-        // Dim unmatched nodes when search is active
-        const matched = !searchTerm || n.name.toLowerCase().includes(searchTerm);
-        opacities.push(matched ? 0.88 : 0.12);
-
-        const commLabel = nodeCommTitle(n) ? `<br><b>Community:</b> ${nodeCommTitle(n)}` : '';
-        hovers.push(
-          `<b>${n.name}</b><br>` +
-          `Type/Comm: ${label}<br>` +
-          `<b>Degree:</b> ${n.degree} · <b>Freq:</b> ${n.frequency}` +
-          commLabel +
-          (n.description ? `<br><br><i>${n.description.slice(0, 180)}…</i>` : '')
-        );
+    function makeNodeTrace(nodes,label,color,searchTerm,showLabels){
+      const xs=[],ys=[],texts=[],sizes=[],opacities=[],hovers=[];
+      nodes.forEach(n=>{
+        xs.push(n.x);ys.push(n.y);texts.push(n.name);
+        sizes.push(Math.max(5,Math.min(22,5+Math.sqrt(n.degree)*2.5)));
+        opacities.push(!searchTerm||n.name.toLowerCase().includes(searchTerm)?0.88:0.12);
+        const cl=nodeCommTitle(n)?`<br><b>Community:</b> ${nodeCommTitle(n)}`:'';
+        hovers.push(`<b>${n.name}</b><br>Type/Comm: ${label}<br><b>Degree:</b> ${n.degree} · <b>Freq:</b> ${n.frequency}${cl}${n.description?`<br><br><i>${n.description.slice(0,180)}…</i>`:''}`);
       });
-
-      return {
-        type: 'scatter',
-        mode: showLabels ? 'markers+text' : 'markers',
-        x: xs,
-        y: ys,
-        text: texts,
-        textposition: 'top center',
-        textfont: { size: 9, color: 'rgba(203,213,225,0.85)' },
-        name: label,
-        hovertext: hovers,
-        hoverinfo: 'text',
-        marker: {
-          color: color,
-          size: sizes,
-          opacity: opacities,
-          line: { color: 'rgba(255,255,255,0.15)', width: 1 },
-        },
-      };
+      return{type:'scatter',mode:showLabels?'markers+text':'markers',x:xs,y:ys,text:texts,textposition:'top center',textfont:{size:9,color:'rgba(203,213,225,0.85)'},name:label,hovertext:hovers,hoverinfo:'text',marker:{color,size:sizes,opacity:opacities,line:{color:'rgba(255,255,255,0.15)',width:1}}};
     }
 
-    function showUmapDetail(node) {
-      const panel = document.getElementById('umapDetail');
-      const color = TYPE_COLORS[node.type] || FALLBACK_COLOR;
-      document.getElementById('udType').innerHTML =
-        `<span style="color: ${color}; text-transform: uppercase; font-weight: 700; font-size: 0.75rem; letter-spacing: 0.5px;">${node.type || '—'}</span>`;
-      document.getElementById('udName').textContent = node.name;
-      document.getElementById('udMeta').textContent =
-        `Degree ${node.degree}  ·  Frequency ${node.frequency}`;
-      document.getElementById('udDesc').textContent = node.description || '—';
-      document.getElementById('udComm').textContent =
-        nodeCommTitle(node) ? `Community: ${nodeCommTitle(node)}` : '';
+    function showUmapDetail(node){
+      const panel=document.getElementById('umapDetail');
+      const color=TYPE_COLORS[node.type]||FALLBACK_COLOR;
+      document.getElementById('udType').innerHTML=`<span style="color:${color};text-transform:uppercase;font-weight:700;font-size:0.75rem;letter-spacing:0.5px;">${node.type||'—'}</span>`;
+      document.getElementById('udName').textContent=node.name;
+      document.getElementById('udMeta').textContent=`Degree ${node.degree}  ·  Frequency ${node.frequency}`;
+      document.getElementById('udDesc').textContent=node.description||'—';
+      document.getElementById('udComm').textContent=nodeCommTitle(node)?`Community: ${nodeCommTitle(node)}`:'';
       panel.classList.remove('hidden');
     }
 
-    function triggerResize() {
-      const el = document.getElementById('umapChart');
-      if (el && umapChart) Plotly.relayout(el, { autosize: true });
+    function triggerResize(){
+      const el=document.getElementById('umapChart');
+      if(el&&umapChart)Plotly.relayout(el,{autosize:true});
     }
   </script>
 </body>

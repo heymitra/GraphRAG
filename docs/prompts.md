@@ -1,6 +1,14 @@
 # Prompts Reference
 
-All prompts live in `prompts/` and are referenced from `settings.yaml`. They use `{variable}` placeholders that GraphRAG fills at runtime. Prompts are plain text files — edit them freely to adapt entity types, output formats, language, or analytical focus.
+All prompts live in `prompts/` and are referenced from `settings.yaml`. Prompts are plain text files — edit them freely to adapt entity types, output formats, language, or analytical focus.
+
+Most prompts use `{variable}` placeholders that GraphRAG fills at runtime. In `graphrag==3.0.6`, the extraction prompts use literal delimiter tokens in the prompt body:
+
+- tuple delimiter: `<|>`
+- record delimiter: `##`
+- completion delimiter: `<|COMPLETE|>`
+
+Legacy 2.x placeholders like `{tuple_delimiter}`, `{record_delimiter}`, and `{completion_delimiter}` will fail under GraphRAG 3.x.
 
 `./auto_tune.sh` generates tuned indexing prompts into `prompts_auto/` and the companion `settings.auto.yaml` points only the supported auto-generated files at that directory. In this repo's `graphrag==3.0.6` setup, auto tuning generates:
 
@@ -25,9 +33,6 @@ It does **not** generate `extract_claims.txt`, `community_report_text.txt`, or a
 |----------|--------|---------------|
 | `{entity_types}` | `settings.yaml → extract_graph.entity_types` | `organization,person,geo,event,product,technology` |
 | `{input_text}` | TextUnit text | Raw chunk content |
-| `{tuple_delimiter}` | Internal constant | `<\|>` |
-| `{record_delimiter}` | Internal constant | `\n` |
-| `{completion_delimiter}` | Internal constant | `<COMPLETE>` |
 
 **Task:**
 1. Extract all entities of the configured types and emit `("entity"|name|type|description)` tuples.
@@ -37,9 +42,9 @@ It does **not** generate `extract_claims.txt`, `community_report_text.txt`, or a
 **Output example:**
 ```
 ("entity"<|>ACME CORP<|>ORGANIZATION<|>A software company building enterprise tools)
-<|>
+##
 ("relationship"<|>ACME CORP<|>JOHN DOE<|>John Doe is the CEO of Acme Corp<|>9)
-<COMPLETE>
+<|COMPLETE|>
 ```
 
 **Customisation notes:**
@@ -79,7 +84,6 @@ It does **not** generate `extract_claims.txt`, `community_report_text.txt`, or a
 | `{entity_specs}` | Entity types or specific entity names | `organization, person, geo, event, product, technology` |
 | `{claim_description}` | `settings.yaml → extract_claims.description` | `"Any claims or facts that could be relevant to information discovery."` |
 | `{input_text}` | TextUnit text | Raw chunk content |
-| `{tuple_delimiter}`, `{record_delimiter}`, `{completion_delimiter}` | Internal constants | Same as `extract_graph.txt` |
 
 **Output format:**
 ```

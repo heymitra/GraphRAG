@@ -73,6 +73,10 @@ DISCOVER_ENTITY_TYPES="false" \
 
 The defaults in `auto_tune.sh` intentionally match this repo's 3.x chunking settings.
 
+`auto_tune.sh` also stages a prompt-tune-safe runtime. If the selected config points at `prompts_auto/` before those files exist, the staging layer temporarily falls back to the matching baseline prompt files in `prompts/` so prompt generation can complete.
+
+The wrapper now also caps the effective prompt-tune `LIMIT` to the number of available chunks in the current corpus. This works around an upstream GraphRAG 3.0.6 bug where `prompt-tune` crashes if `limit` is larger than the chunk population.
+
 ### 4. Review the generated prompts
 
 Check:
@@ -108,6 +112,37 @@ Your baseline `output/` remains untouched.
 source graphrag-env/bin/activate
 GRAPHRAG_CONFIG=settings.auto.yaml python frontend/app.py
 ```
+
+When the frontend is launched with `GRAPHRAG_CONFIG=settings.auto.yaml`, `Auto-tuned prompts` becomes the startup dataset. The same UI still lets you switch back to `Default prompts` for comparison.
+
+When you upload with the `Auto-tuned prompts` mode selected, the frontend does this automatically:
+
+1. the uploaded PDF is extracted into `input/`
+2. `auto_tune.sh` runs against the current `input/` corpus
+3. `prompts_auto/` is regenerated
+4. tuned indexing runs into `output_auto/`
+
+This is the right mode if you expect tuned prompts to be derived from the newly uploaded document before the graph is rebuilt.
+
+The frontend now separates extraction QA from graph publishing:
+
+- the results workspace strip shows which prompt source and pipeline path are active
+- `Current Prompt Set` previews the live prompt files for the selected dataset or next upload path
+- the upload modal can pass per-upload auto-tune flags such as `DOMAIN`, `SELECTION_METHOD`, `LIMIT`, `CHUNK_SIZE`, and `DISCOVER_ENTITY_TYPES`
+- the `Documents` modal shows indexed document metadata, explorer-only inclusion checkboxes, and the exact prompt snapshot recorded for a document's successful indexing run
+- Neo4j sync is manual from `Documents -> Sync Neo4j`
+- document inclusion checkboxes do not change prompt tuning, indexing, or the Neo4j import payload
+
+Frontend uploads now persist prompt provenance in `prompt_history/`. For auto-tuned runs this matters because the tuned prompts are corpus-derived: `Documents -> Inspect exact prompts` lets you inspect the generated prompt snapshot that was actually used for that document, even after `prompts_auto/` changes later.
+
+If you want to reuse existing tuned prompts instead of regenerating them on every upload:
+
+```bash
+source graphrag-env/bin/activate
+AUTO_TUNE_ON_UPLOAD=false GRAPHRAG_CONFIG=settings.auto.yaml python frontend/app.py
+```
+
+That opt-out mode restores the stricter behavior where `prompts_auto/` must already exist.
 
 ### 7. Compare baseline vs tuned query answers
 
@@ -159,7 +194,13 @@ python -m graphrag query --root "$RUNTIME_ROOT" --data "$OUTPUT_DIR" -m local "W
 | Problem | Fix |
 |---------|-----|
 | `settings.auto.yaml` fails because `prompts_auto/` does not exist | Run `./auto_tune.sh` first |
-| Frontend still shows baseline data | Launch it with `GRAPHRAG_CONFIG=settings.auto.yaml` |
+| `KeyError: 'tuple_delimiter'` or prompt validation fails | One or more prompt files still use legacy GraphRAG 2.x placeholders. Replace them with GraphRAG 3.x prompt files or rerun `./auto_tune.sh` to regenerate `prompts_auto/` |
+| The frontend keeps showing baseline data after a tuned upload | Switch the top-bar dataset selector to `Auto-tuned prompts`, or upload with that mode selected so the UI switches there automatically when the run finishes |
+| The frontend should start in tuned mode after a restart | Launch it with `GRAPHRAG_CONFIG=settings.auto.yaml` to make `Auto-tuned prompts` the startup default |
+| Neo4j did not change after a tuned upload | Frontend uploads no longer import Neo4j automatically. Open `Documents` and click `Sync Neo4j` after you inspect the tuned output |
 | Tuned queries still look unchanged | Make sure one run uses `settings.yaml` and the other uses `settings.auto.yaml` |
+| The explorer shows fewer rows than the parquet counts suggest | The `Documents` modal checkboxes filter what the frontend displays. Re-include the documents you want visible |
 | Claims quality still looks generic | That prompt is not auto-generated; tune `prompts/extract_claims.txt` manually |
+| `generate_text_embeddings` fails with `multiple of the list_size` | `text-embedding-3-small` needs `vector_store.vector_size: 1536`. This repo now validates that early and resets the local LanceDB output before rebuilds |
 | A reused old venv has strange dependency conflicts | Recreate `graphrag-env` and reinstall from `requirements.txt` |
+| Tuned uploads are slower than baseline uploads | That is expected because `prompt-tune` runs before indexing when `AUTO_TUNE_ON_UPLOAD` is enabled |

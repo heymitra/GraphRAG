@@ -32,7 +32,7 @@ CONFIG_FILE="${GRAPHRAG_CONFIG:-settings.yaml}"
 CLEAR_CACHE="${CLEAR_CACHE:-true}"
 NEO4J_BROWSER_URL="${NEO4J_BROWSER_URL:-http://localhost:7475}"
 
-"$PYTHON_BIN" "$PROJECT_ROOT/graphrag_runtime.py" validate-prompts --config "$CONFIG_FILE"
+"$PYTHON_BIN" "$PROJECT_ROOT/graphrag_runtime.py" validate-config --config "$CONFIG_FILE"
 
 STAGE_CMD=(
     "$PYTHON_BIN"
@@ -59,6 +59,7 @@ echo "Config: ${CONFIG_PATH#$PROJECT_ROOT/}"
 echo "Runtime root: ${RUNTIME_ROOT#$PROJECT_ROOT/}"
 echo "Output: ${OUTPUT_DIR#$PROJECT_ROOT/}"
 echo "Cache: ${CACHE_DIR#$PROJECT_ROOT/}"
+echo "Vector store: ${VECTOR_STORE_DIR#$PROJECT_ROOT/}"
 
 if [[ "$CLEAR_CACHE" == "true" ]]; then
     echo "Clearing cache..."
@@ -66,6 +67,9 @@ if [[ "$CLEAR_CACHE" == "true" ]]; then
 else
     echo "Keeping cache (CLEAR_CACHE=false)"
 fi
+
+echo "Resetting vector store..."
+rm -rf "$VECTOR_STORE_DIR"
 
 echo "Re-indexing with GraphRAG 3.x..."
 "$PYTHON_BIN" -m graphrag index --root "$RUNTIME_ROOT"
