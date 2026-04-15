@@ -2,7 +2,7 @@
 
 All prompts live in `prompts/` and are referenced from `settings.yaml`. They use `{variable}` placeholders that GraphRAG fills at runtime. Prompts are plain text files — edit them freely to adapt entity types, output formats, language, or analytical focus.
 
-`./auto_tune.sh` generates tuned indexing prompts into `prompts_auto/` and the companion `settings.auto.yaml` points only the supported auto-generated files at that directory. In this repo's GraphRAG version, auto tuning generates:
+`./auto_tune.sh` generates tuned indexing prompts into `prompts_auto/` and the companion `settings.auto.yaml` points only the supported auto-generated files at that directory. In this repo's `graphrag==3.0.6` setup, auto tuning generates:
 
 - `extract_graph.txt`
 - `summarize_descriptions.txt`
@@ -17,7 +17,7 @@ It does **not** generate `extract_claims.txt`, `community_report_text.txt`, or a
 ### `extract_graph.txt` — Entity & Relationship Extraction
 
 **Pipeline step:** Step 2 — called once per TextUnit (plus gleaning passes)  
-**Model:** `default_chat_model`
+**Model:** `default_completion_model`
 
 **Variables injected:**
 
@@ -51,7 +51,7 @@ It does **not** generate `extract_claims.txt`, `community_report_text.txt`, or a
 ### `summarize_descriptions.txt` — Description Summarisation
 
 **Pipeline step:** Step 4 — called per entity or relationship that accumulated more than one description across chunks  
-**Model:** `default_chat_model`
+**Model:** `default_completion_model`
 
 **Variables injected:**
 
@@ -70,7 +70,7 @@ It does **not** generate `extract_claims.txt`, `community_report_text.txt`, or a
 ### `extract_claims.txt` — Claim / Covariate Extraction
 
 **Pipeline step:** Step 5 — called once per TextUnit (plus gleaning passes)  
-**Model:** `default_chat_model`
+**Model:** `default_completion_model`
 
 **Variables injected:**
 
@@ -94,7 +94,7 @@ It does **not** generate `extract_claims.txt`, `community_report_text.txt`, or a
 ### `community_report_graph.txt` — Community Report (Graph Context)
 
 **Pipeline step:** Step 7 — called per community  
-**Model:** `default_chat_model`
+**Model:** `default_completion_model`
 
 **Variables injected:**
 
@@ -223,7 +223,7 @@ Answers questions from retrieved text chunks with no graph context. Equivalent t
 
 ### `question_gen_system_prompt.txt` — Question Generation
 
-This prompt file exists in the GraphRAG prompt pack for question generation workflows. In the pinned `graphrag==2.7.1` CLI used by this repository, the standard `graphrag query` command exposes `local`, `global`, `drift`, and `basic`, so treat `question_gen_system_prompt.txt` as an advanced or future-facing prompt rather than part of the default CLI workflow in this repo.
+This prompt file exists in the GraphRAG prompt pack for question generation workflows. In the pinned `graphrag==3.0.6` CLI used by this repository, the standard query flow exposed through `./query_graph.sh` still centers on `local`, `global`, `drift`, and `basic`, so treat `question_gen_system_prompt.txt` as an advanced or future-facing prompt rather than part of the default repo workflow.
 
 ---
 
@@ -240,4 +240,4 @@ This prompt file exists in the GraphRAG prompt pack for question generation work
 | Domain-specific entity types | Replace the generic entity type list with domain vocabulary (e.g. `drug, gene, disease, symptom` for biomedical) |
 | Change scoring rubric for community reports | Edit the rating instructions in `community_report_graph.txt` |
 
-After changing any indexing prompt file, **clear the matching LLM cache** before re-indexing. Use `cache/` for the baseline config and `cache_auto/` for `settings.auto.yaml`. The cache is keyed on input hash, which includes prompt content.
+After changing any indexing prompt file, **clear the matching LLM cache** before re-indexing. Use `cache/` for the baseline config and `cache_auto/` for `settings.auto.yaml`, or just run `./update_graph.sh` with the default `CLEAR_CACHE=true`. The cache is keyed on input hash, which includes prompt content.

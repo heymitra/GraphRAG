@@ -14,8 +14,7 @@ Step 5   Claim Extraction      → covariates.parquet                   ← LLM,
 Step 6   Community Detection   → communities.parquet                  ← Leiden algorithm
 Step 7   Community Reports     → community_reports.parquet            ← LLM, per community
 Step 8   Embeddings            → embeddings.*.parquet, LanceDB
-Step 9   UMAP                  → Entity.x, Entity.y
-Step 10  Snapshots             → graph.graphml, embedding files
+Step 9   Snapshots             → graph.graphml, embedding files
 ```
 
 **Cost formula** for a corpus with _N_ chunks and _C_ communities:
@@ -41,10 +40,11 @@ Each file becomes one `Document` record with `id` (UUID), `title` (filename), `t
 **Output:** `text_units.parquet`
 
 ```yaml
-chunks:
+chunking:
+  type: tokens
   size: 3000
   overlap: 300
-  group_by_columns: [id]
+  encoding_model: o200k_base
 ```
 
 Each `TextUnit` records: `id`, `text`, `n_tokens`, `human_readable_id`, `document_ids`.
@@ -75,7 +75,7 @@ GraphRAG does **not** present multiple adjacent chunks to the LLM as a single ex
 
 **Prompt:** `prompts/extract_graph.txt`  
 **Called per:** each TextUnit  
-**Model:** `default_chat_model` (`gpt-4o-mini`)  
+**Model:** `default_completion_model` (`gpt-4o-mini`)  
 **Parallelism:** concurrent across chunks, bounded by `concurrent_requests: 25`
 
 ### LLM input
@@ -358,10 +358,7 @@ Community reports are not cosmetic summaries. They are one of the primary **retr
 
 ```yaml
 embed_text:
-  model_id: default_embedding_model    # text-embedding-3-small
-
-embed_graph:
-  enabled: true
+  embedding_model_id: default_embedding_model    # text-embedding-3-small
 ```
 
 ### Text embeddings
@@ -374,41 +371,13 @@ Three fields are embedded and stored in both Parquet files and LanceDB:
 | `embeddings.text_unit.text.parquet` | `TextUnit.text` | Local search, Basic search |
 | `embeddings.community.full_content.parquet` | `CommunityReport.full_content` | Global search, DRIFT |
 
-### Graph embeddings (node2vec)
-
-`embed_graph: enabled: true` computes **structural embeddings** for entity nodes using a graph embedding algorithm (node2vec). These capture where a node sits in the graph topology — which communities it belongs to, how central it is, which other nodes it is adjacent to.
-
-These structural vectors are distinct from semantic text embeddings. They reflect graph structure, not semantic meaning.
-
 ### LanceDB
 
 All retrieval-ready vectors are stored in `output/lancedb/default/` with tables for `entity_description`, `text_unit_text`, and `community_full_content`. LanceDB is the embedded vector store used at query time.
 
 ---
 
-## Step 9 — UMAP Layout
-
-```yaml
-umap:
-  enabled: true
-```
-
-UMAP reduces the high-dimensional graph embeddings (from Step 8) to 2D coordinates stored as `Entity.x` and `Entity.y`.
-
-### Interpretation
-
-- Entities **close together** in (x, y) have similar graph neighbourhoods or community membership.
-- Entities **far apart** are structurally dissimilar.
-- The axes themselves carry **no semantic meaning**. Only relative position matters.
-- These are **not** geographic coordinates, semantic scales, or importance rankings.
-
-UMAP coordinates are primarily a **visualisation aid** — for frontend graph displays, debugging cluster quality, and spotting hubs and outliers. They are not used in any of the standard search strategies.
-
-**Prerequisite:** `embed_graph: enabled: true` must be set; UMAP operates on the graph embeddings.
-
----
-
-## Step 10 — Snapshots
+## Step 9 — Snapshots
 
 ```yaml
 snapshots:

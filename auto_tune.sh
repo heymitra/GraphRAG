@@ -30,15 +30,6 @@ resolve_python_bin() {
 PYTHON_BIN="$(resolve_python_bin)"
 CONFIG_FILE="${GRAPHRAG_CONFIG:-settings.yaml}"
 
-if [[ "$CONFIG_FILE" != /* ]]; then
-    CONFIG_FILE="$PROJECT_ROOT/$CONFIG_FILE"
-fi
-
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "Config file not found: $CONFIG_FILE" >&2
-    exit 1
-fi
-
 shopt -s nullglob
 input_files=("$PROJECT_ROOT"/input/*.txt)
 shopt -u nullglob
@@ -52,12 +43,23 @@ LANGUAGE="${LANGUAGE:-English}"
 SELECTION_METHOD="${SELECTION_METHOD:-random}"
 LIMIT="${LIMIT:-15}"
 MAX_TOKENS="${MAX_TOKENS:-2000}"
-CHUNK_SIZE="${CHUNK_SIZE:-1200}"
-OVERLAP="${OVERLAP:-100}"
+CHUNK_SIZE="${CHUNK_SIZE:-3000}"
+OVERLAP="${OVERLAP:-300}"
 MIN_EXAMPLES_REQUIRED="${MIN_EXAMPLES_REQUIRED:-2}"
 N_SUBSET_MAX="${N_SUBSET_MAX:-300}"
 K="${K:-15}"
 DISCOVER_ENTITY_TYPES="${DISCOVER_ENTITY_TYPES:-false}"
+
+STAGE_CMD=(
+    "$PYTHON_BIN"
+    "$PROJECT_ROOT/graphrag_runtime.py"
+    stage
+    --config
+    "$CONFIG_FILE"
+    --format
+    shell
+)
+eval "$("${STAGE_CMD[@]}")"
 
 CMD=(
     "$PYTHON_BIN"
@@ -65,9 +67,7 @@ CMD=(
     graphrag
     prompt-tune
     --root
-    "$PROJECT_ROOT"
-    --config
-    "$CONFIG_FILE"
+    "$RUNTIME_ROOT"
     --selection-method
     "$SELECTION_METHOD"
     --limit
@@ -87,7 +87,7 @@ CMD=(
     --language
     "$LANGUAGE"
     --output
-    prompts_auto
+    "$PROJECT_ROOT/prompts_auto"
 )
 
 if [[ -n "$DOMAIN" ]]; then
@@ -101,9 +101,10 @@ else
 fi
 
 echo "Generating auto-tuned prompts..."
-echo "  Config: ${CONFIG_FILE#$PROJECT_ROOT/}"
-echo "  Output: prompts_auto/"
-echo "  Selection method: $SELECTION_METHOD"
+echo "Config: ${CONFIG_PATH#$PROJECT_ROOT/}"
+echo "Runtime root: ${RUNTIME_ROOT#$PROJECT_ROOT/}"
+echo "Prompt output: prompts_auto/"
+echo "Selection method: $SELECTION_METHOD"
 
 "${CMD[@]}"
 
@@ -116,5 +117,5 @@ echo "       GRAPHRAG_CONFIG=settings.auto.yaml ./update_graph.sh"
 echo "  3. Launch the frontend against the tuned output:"
 echo "       GRAPHRAG_CONFIG=settings.auto.yaml $PYTHON_BIN frontend/app.py"
 echo "  4. Compare answers with the baseline:"
-echo "       $PYTHON_BIN -m graphrag query --root . --config settings.yaml -m local -q \"What are the main entities and relationships?\""
-echo "       $PYTHON_BIN -m graphrag query --root . --config settings.auto.yaml -m local -q \"What are the main entities and relationships?\""
+echo "       ./query_graph.sh -m local \"What are the main entities and relationships?\""
+echo "       GRAPHRAG_CONFIG=settings.auto.yaml ./query_graph.sh -m local \"What are the main entities and relationships?\""

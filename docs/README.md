@@ -1,33 +1,23 @@
 # GraphRAG Documentation
 
-Technical documentation for the Microsoft GraphRAG pipeline in this repository, including the Neo4j import layer and graph visualization extensions.
-
----
+Technical documentation for the Microsoft GraphRAG pipeline in this repository, including the Neo4j import layer and the 3.x config/runtime wrappers used by this project.
 
 ## Contents
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](architecture.md) | System overview, core concepts, and how GraphRAG differs from plain vector RAG |
-| [Indexing Pipeline](indexing_pipeline.md) | Step-by-step pipeline: chunking, extraction, merging, communities, embeddings, and snapshots — including all concurrency and implementation details |
-| [Data Model](data_model.md) | Schema for every Parquet table, LanceDB, embeddings, GraphML, and provenance chains |
-| [Search Strategies](search.md) | Local, Global, DRIFT, and Basic search — flows, context assembly, token budgets, and when to use each |
-| [Auto Prompt Tuning](auto_tuning.md) | How this repo enables GraphRAG auto tuning, what files it generates, and how to compare baseline vs tuned runs |
-| [Prompts Reference](prompts.md) | Every LLM prompt explained: variables, input/output formats, and customisation guide |
-| [Configuration Reference](configuration.md) | Annotated `settings.yaml` with trade-off notes for every significant setting |
-| [Neo4j Schema](neo4j.md) | Node labels, relationship types, indexes, and Cypher query cookbook |
-
----
+| [Architecture](architecture.md) | System overview and how GraphRAG differs from plain vector RAG |
+| [Indexing Pipeline](indexing_pipeline.md) | Step-by-step pipeline from documents to graph outputs |
+| [Data Model](data_model.md) | Schema for the parquet outputs, LanceDB, embeddings, and provenance |
+| [Search Strategies](search.md) | Local, Global, DRIFT, and Basic search behavior |
+| [Auto Prompt Tuning](auto_tuning.md) | How this repo runs GraphRAG auto tuning on 3.0.6 |
+| [Prompts Reference](prompts.md) | Every prompt file used by the repo |
+| [Configuration Reference](configuration.md) | Annotated `settings.yaml` and `settings.auto.yaml` |
+| [Neo4j Schema](neo4j.md) | Node labels, relationship types, indexes, and Cypher examples |
 
 ## Quick Start
 
-### Full rebuild
-
-```bash
-./update_graph.sh
-```
-
-### Manual steps
+### Full baseline rebuild
 
 ```bash
 source graphrag-env/bin/activate
@@ -46,49 +36,32 @@ GRAPHRAG_CONFIG=settings.auto.yaml python3 frontend/app.py
 ### Query
 
 ```bash
-python3 -m graphrag query --root . --config settings.yaml -m local  -q "Who is X?"
-python3 -m graphrag query --root . --config settings.yaml -m global -q "What are the main themes?"
-python3 -m graphrag query --root . --config settings.auto.yaml -m local -q "Who is X?"
+./query_graph.sh -m local  "Who is X?"
+./query_graph.sh -m global "What are the main themes?"
+GRAPHRAG_CONFIG=settings.auto.yaml ./query_graph.sh -m local "Who is X?"
 ```
 
-### Manual indexing steps
+### Raw GraphRAG 3.x CLI
 
 ```bash
 source graphrag-env/bin/activate
-rm -rf cache/
-python3 -m graphrag index --root . --config settings.yaml
-python3 import_neo4j.py
+eval "$(python graphrag_runtime.py stage --config settings.yaml --format shell)"
+python3 -m graphrag index --root "$RUNTIME_ROOT"
+python3 -m graphrag query --root "$RUNTIME_ROOT" --data "$OUTPUT_DIR" -m local "Who is X?"
 ```
-
----
 
 ## Key File Locations
 
 | Path | Purpose |
 |------|---------|
-| `settings.yaml` | All pipeline configuration |
-| `prompts/` | LLM prompt templates (indexing and query) |
+| `settings.yaml` | Baseline GraphRAG 3.x config |
+| `settings.auto.yaml` | Tuned GraphRAG config |
+| `graphrag_runtime.py` | Stages selected configs into `.graphrag-runtime/` |
+| `prompts/` | Baseline prompt templates |
+| `prompts_auto/` | Auto-generated indexing prompts |
 | `input/` | Source `.txt` documents |
-| `output/*.parquet` | Canonical persisted knowledge model |
-| `output/lancedb/` | Vector store for retrieval |
-| `output/graph.graphml` | Graph snapshot for Gephi / Cytoscape |
-| `cache/` | LLM response cache |
-| `import_neo4j.py` | Loads all Parquet outputs into Neo4j |
-| `extract_pdf.py` | PDF-to-text helper |
-
----
-
-## Pipeline Mental Model
-
-```
-Documents
-  └─► TextUnits (chunks)
-        └─► Chunk-local extraction (parallel)
-              └─► Cross-chunk merge + description summarisation
-                    └─► Canonical graph (entities + relationships + claims)
-                          └─► Community detection (Leiden)
-                                └─► Community reports (LLM, per community)
-                                      └─► Embeddings + UMAP + GraphML snapshots
-```
-
-The central insight of GraphRAG is that retrieval happens over **pre-computed, structured summaries** of the graph — not over raw text chunks alone. This makes broad, multi-document reasoning tractable at query time.
+| `output/*.parquet` | Baseline persisted knowledge model |
+| `output_auto/*.parquet` | Tuned persisted knowledge model |
+| `cache/` and `cache_auto/` | LLM response caches |
+| `import_neo4j.py` | Loads GraphRAG output into Neo4j |
+| `frontend/app.py` | Web UI for uploads and inspection |

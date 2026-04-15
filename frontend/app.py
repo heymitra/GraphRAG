@@ -10,42 +10,25 @@ import shutil
 import time
 import math
 import json as _json
-import yaml
 
+import networkx as nx
 import pandas as pd
+from graphrag_runtime import find_missing_prompt_paths, stage_runtime_config
 
 # ── Paths (relative to project root, where the app is launched from) ──────────
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-GRAPHRAG_CONFIG = os.getenv('GRAPHRAG_CONFIG', 'settings.yaml')
-if not os.path.isabs(GRAPHRAG_CONFIG):
-    GRAPHRAG_CONFIG = os.path.join(PROJECT_ROOT, GRAPHRAG_CONFIG)
-
-def _resolve_project_path(path_value, fallback_name):
-    """Resolve a project-relative path, preserving absolute paths."""
-    if not path_value:
-        return os.path.join(PROJECT_ROOT, fallback_name)
-    if os.path.isabs(path_value):
-        return path_value
-    return os.path.join(PROJECT_ROOT, path_value)
-
-def _load_graphrag_settings(config_path):
-    """Best-effort YAML loader for deriving output/cache locations from the active config."""
-    try:
-        with open(config_path, 'r', encoding='utf-8') as handle:
-            return yaml.safe_load(handle) or {}
-    except (FileNotFoundError, OSError, yaml.YAMLError):
-        return {}
-
-SETTINGS = _load_graphrag_settings(GRAPHRAG_CONFIG)
+CONFIG_REQUEST = os.getenv('GRAPHRAG_CONFIG', 'settings.yaml')
 OUTPUT_OVERRIDE = os.getenv('GRAPHRAG_OUTPUT_DIR')
-OUTPUT_FOLDER = _resolve_project_path(
-    OUTPUT_OVERRIDE or SETTINGS.get('output', {}).get('base_dir'),
-    'output',
+CACHE_OVERRIDE = os.getenv('GRAPHRAG_CACHE_DIR')
+RUNTIME_INFO = stage_runtime_config(
+    CONFIG_REQUEST,
+    output_override=OUTPUT_OVERRIDE,
+    cache_override=CACHE_OVERRIDE,
 )
-CACHE_FOLDER = _resolve_project_path(
-    os.getenv('GRAPHRAG_CACHE_DIR') or SETTINGS.get('cache', {}).get('base_dir'),
-    'cache',
-)
+GRAPHRAG_CONFIG = RUNTIME_INFO.config_path
+RUNTIME_ROOT = RUNTIME_INFO.runtime_root
+OUTPUT_FOLDER = RUNTIME_INFO.output_dir
+CACHE_FOLDER = RUNTIME_INFO.cache_dir
 UPLOAD_FOLDER = os.path.join(PROJECT_ROOT, 'frontend', 'uploads')
 INPUT_FOLDER  = os.path.join(PROJECT_ROOT, 'input')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -105,6 +88,60 @@ def _clean_type(val):
         return ''
     return str(val).split('<')[0].strip()
 
+def _build_layout_positions(ents_df, rels_df):
+    """Use saved coordinates when present, otherwise derive a stable spring layout."""
+    positions = {}
+    graph = nx.Graph()
+    has_saved_layout = True
+
+    for _, row in ents_df.iterrows():
+        name = row.get('title', '') or ''
+        if not name:
+            continue
+        graph.add_node(name)
+        try:
+            x = float(row.get('x'))
+            y = float(row.get('y'))
+            if math.isnan(x) or math.isnan(y):
+                raise ValueError
+            positions[name] = (x, y)
+        except (TypeError, ValueError):
+            has_saved_layout = False
+
+    for _, row in rels_df.iterrows():
+        src = row.get('source', '') or ''
+        tgt = row.get('target', '') or ''
+        if not src or not tgt:
+            continue
+        try:
+            weight = float(row.get('weight', 1.0) or 1.0)
+        except (TypeError, ValueError):
+            weight = 1.0
+        graph.add_edge(src, tgt, weight=weight)
+
+    if graph.number_of_nodes() == 0:
+        return {}
+
+    if has_saved_layout and positions:
+        return positions
+
+    if graph.number_of_edges() == 0:
+        names = list(graph.nodes())
+        total = max(len(names), 1)
+        return {
+            name: (
+                math.cos((2 * math.pi * idx) / total),
+                math.sin((2 * math.pi * idx) / total),
+            )
+            for idx, name in enumerate(names)
+        }
+
+    return {
+        name: (float(coords[0]), float(coords[1]))
+        for name, coords in nx.spring_layout(graph, seed=42, weight='weight').items()
+    }
+
+
 # ── Global pipeline state ─────────────────────────────────────────────────────
 pipeline_state = {
     "status": "idle",   # idle | running | done | error
@@ -148,7 +185,18 @@ def run_full_pipeline(pdf_path, stem):
 
     try:
         _log(f"Using GraphRAG config → {os.path.relpath(GRAPHRAG_CONFIG, PROJECT_ROOT)}")
+        _log(f"Using GraphRAG runtime root → {os.path.relpath(RUNTIME_ROOT, PROJECT_ROOT)}")
         _log(f"Using GraphRAG output → {os.path.relpath(OUTPUT_FOLDER, PROJECT_ROOT)}")
+
+        missing_prompts = find_missing_prompt_paths(GRAPHRAG_CONFIG)
+        if missing_prompts:
+            missing_text = "\n".join(f" - {path}" for path in missing_prompts)
+            raise RuntimeError(
+                "The active GraphRAG config references prompt files that do not exist.\n"
+                f"{missing_text}\n"
+                'Run `DOMAIN="your corpus domain" ./auto_tune.sh` before using '
+                "`settings.auto.yaml` for indexing."
+            )
 
         # 1 ─ Extract PDF text ─────────────────────────────────────────────────
         _set_stage("Extracting PDF text")
@@ -166,9 +214,7 @@ def run_full_pipeline(pdf_path, stem):
 
         # 3 ─ Run graphrag index ───────────────────────────────────────────────
         _set_stage("Running GraphRAG indexing (this may take several minutes…)")
-        index_cmd = GRAPHRAG_CMD + ['index', '--root', PROJECT_ROOT, '--config', GRAPHRAG_CONFIG]
-        if OUTPUT_OVERRIDE:
-            index_cmd += ['--output', OUTPUT_FOLDER]
+        index_cmd = GRAPHRAG_CMD + ['index', '--root', RUNTIME_ROOT]
         ok = _run_step(index_cmd)
         if not ok:
             raise RuntimeError("graphrag index failed – check the log above.")
@@ -208,6 +254,16 @@ def index():
 def upload():
     if pipeline_state["status"] == "running":
         return jsonify({"error": "A pipeline is already running. Please wait."}), 409
+    missing_prompts = find_missing_prompt_paths(GRAPHRAG_CONFIG)
+    if missing_prompts:
+        return jsonify({
+            "error": (
+                "The active GraphRAG config is missing prompt files. "
+                'Run `DOMAIN="your corpus domain" ./auto_tune.sh` before using '
+                "`settings.auto.yaml`."
+            ),
+            "missing_prompts": missing_prompts,
+        }), 400
     if 'pdf' not in request.files:
         return jsonify({"error": "No file part"}), 400
     file = request.files['pdf']
@@ -459,7 +515,7 @@ def api_db_info():
 
 @app.route('/api/umap')
 def api_umap():
-    """Return entity UMAP coordinates read directly from parquet pipeline output."""
+    """Return entity layout coordinates from parquet or a derived graph layout."""
     ents_df  = _parquet('entities.parquet')
     rels_df  = _parquet('relationships.parquet')
     comms_df = _parquet('communities.parquet')
@@ -511,16 +567,17 @@ def api_umap():
         if doc_ids:
             tu_to_docs[str(row['id'])] = doc_ids
 
+    layout_pos = _build_layout_positions(ents_df, rels_df)
+
     # ── Nodes ─────────────────────────────────────────────────────────────────
     nodes = []
     pos   = {}
     for _, row in ents_df.iterrows():
-        x, y = row.get('x'), row.get('y')
-        if x is None or y is None or math.isnan(float(x)):
-            continue
-        x, y  = float(x), float(y)
         eid   = str(row['id'])
         name  = row.get('title', '') or ''
+        if name not in layout_pos:
+            continue
+        x, y = layout_pos[name]
         doc_ids = []
         for tu_id in _to_list(row.get('text_unit_ids')):
             for did in tu_to_docs.get(str(tu_id), []):

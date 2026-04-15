@@ -17,6 +17,7 @@ cache_auto/
 logs/
 logs_auto/
 prompts_auto/
+.graphrag-runtime/
 
 # Data files
 *.parquet

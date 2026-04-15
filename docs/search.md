@@ -13,13 +13,15 @@ GraphRAG supports four query strategies. Each is optimised for a different quest
 | **DRIFT** | Complex analysis requiring both depth and breadth | Community reports → local entity context | Multiple iterations | Slow |
 | **Basic** | Simple lookups, latency-sensitive queries | Text unit embeddings only | 1 | Fastest |
 
-**CLI:**
+**Repo query wrapper:**
 ```bash
-python3 -m graphrag query --method local  --query "Who is John Doe?"
-python3 -m graphrag query --method global --query "What are the main themes in this corpus?"
-python3 -m graphrag query --method drift  --query "Analyse the relationship between X and Y"
-python3 -m graphrag query --method basic  --query "Find documents about Z"
+./query_graph.sh -m local  "Who is John Doe?"
+./query_graph.sh -m global "What are the main themes in this corpus?"
+./query_graph.sh -m drift  "Analyse the relationship between X and Y"
+./query_graph.sh -m basic  "Find documents about Z"
 ```
+
+If you need the raw GraphRAG 3.x CLI, stage a config first with `python graphrag_runtime.py stage --config settings.yaml --format shell`, then call `python -m graphrag query --root "$RUNTIME_ROOT" --data "$OUTPUT_DIR" ...`.
 
 ---
 

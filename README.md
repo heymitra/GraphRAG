@@ -1,29 +1,34 @@
-# GraphRAG
+# GraphRAG Neo4j Integration
 
 Extract knowledge graphs from documents with [Microsoft GraphRAG](https://github.com/microsoft/graphrag), inspect them in Neo4j, and compare baseline prompts against auto-tuned prompts without overwriting your main pipeline output.
 
 ## Supported Version
 
-This repository is pinned to **GraphRAG 2.7.1**.
+This repository is pinned to **GraphRAG 3.0.6**.
 
-- The project config in `settings.yaml` uses the 2.x schema.
-- Installing unpinned `graphrag` now pulls a 3.x release, which uses a different config shape and is not drop-in compatible with this repo.
-- Use `requirements.txt` so new environments install the compatible version automatically.
+- `requirements.txt` installs the current 3.x release used by this repo.
+- `settings.yaml` and `settings.auto.yaml` are already migrated to the 3.x config schema.
+- GraphRAG 3.x no longer accepts `--config`, so this repo stages the selected config into `.graphrag-runtime/` before running `index`, `query`, or `prompt-tune`.
+
+If you previously installed GraphRAG 2.x in the same virtual environment, recreating the virtual environment is safer than doing an in-place upgrade.
 
 ## Features
 
-- **PDF ingestion** with `extract_pdf.py`
-- **GraphRAG indexing** for entities, relationships, claims, and communities
-- **Neo4j import** for all GraphRAG output tables
-- **Flask frontend** for uploads, pipeline logs, and graph exploration
-- **Auto prompt tuning workflow** with isolated tuned prompts, cache, logs, and output
-- **Manual prompt tuning support** for claims and query prompts
+- PDF ingestion with `extract_pdf.py`
+- GraphRAG indexing for entities, relationships, claims, and communities
+- Neo4j import for GraphRAG parquet output
+- Flask frontend for uploads, pipeline logs, and graph exploration
+- Auto prompt tuning with isolated tuned prompts, cache, logs, and output
+- Manual prompt tuning for claims and query prompts
+- Baseline and tuned querying through `query_graph.sh`
 
 ## Project Structure
 
 ```text
 ├── auto_tune.sh          # Generate auto-tuned indexing prompts into prompts_auto/
-├── settings.yaml         # Baseline GraphRAG config
+├── query_graph.sh        # Query the active GraphRAG config without hand-building a runtime root
+├── graphrag_runtime.py   # Shared helper that stages configs into .graphrag-runtime/
+├── settings.yaml         # Baseline GraphRAG 3.x config
 ├── settings.auto.yaml    # Tuned GraphRAG config using prompts_auto/ and output_auto/
 ├── prompts/              # Baseline prompt files
 ├── input/                # Source text files
@@ -49,12 +54,6 @@ source graphrag-env/bin/activate
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-```
-
-If you already have an older project environment, update the compatible GraphRAG patch release:
-
-```bash
-python -m pip install graphrag==2.7.1
 ```
 
 ### 3. Configure your OpenAI key
@@ -84,10 +83,11 @@ docker run -d \
 ### Rebuild the baseline graph
 
 ```bash
+source graphrag-env/bin/activate
 ./update_graph.sh
 ```
 
-The script now reads the active GraphRAG config, clears the matching cache directory, runs indexing, and imports the matching output directory into Neo4j.
+The script reads the active config, stages a 3.x-compatible runtime root, optionally clears the matching cache directory, runs GraphRAG indexing, and imports the matching output directory into Neo4j.
 
 ### Start the frontend
 
@@ -102,15 +102,15 @@ Open `http://localhost:8501`.
 
 ```bash
 source graphrag-env/bin/activate
-python -m graphrag query --root . --config settings.yaml -m local  -q "What are the main entities and relationships?"
-python -m graphrag query --root . --config settings.yaml -m global -q "What are the main themes in this corpus?"
-python -m graphrag query --root . --config settings.yaml -m drift  -q "How are the main actors connected?"
-python -m graphrag query --root . --config settings.yaml -m basic  -q "Find documents about topic X"
+./query_graph.sh -m local  "What are the main entities and relationships?"
+./query_graph.sh -m global "What are the main themes in this corpus?"
+./query_graph.sh -m drift  "How are the main actors connected?"
+./query_graph.sh -m basic  "Find documents about topic X"
 ```
 
 ## Auto Prompt Tuning
 
-GraphRAG auto tuning in this repo is for **indexing prompts**. In the supported 2.7.1 workflow it generates:
+GraphRAG auto tuning in this repo is for **indexing prompts**. In GraphRAG 3.0.6 it generates:
 
 - `prompts_auto/extract_graph.txt`
 - `prompts_auto/summarize_descriptions.txt`
@@ -131,6 +131,8 @@ source graphrag-env/bin/activate
 DOMAIN="your corpus domain" ./auto_tune.sh
 ```
 
+`DOMAIN` is recommended but not required. If you omit it, GraphRAG will infer a domain from your input corpus.
+
 Useful environment variables:
 
 ```bash
@@ -138,6 +140,8 @@ DOMAIN="biotech research" \
 LANGUAGE="English" \
 SELECTION_METHOD="random" \
 LIMIT="15" \
+CHUNK_SIZE="3000" \
+OVERLAP="300" \
 DISCOVER_ENTITY_TYPES="false" \
 ./auto_tune.sh
 ```
@@ -154,7 +158,7 @@ GRAPHRAG_CONFIG=settings.auto.yaml ./update_graph.sh
 `settings.auto.yaml` is already configured to:
 
 - read the same `input/`
-- use `prompts_auto/` for the supported auto-tuned indexing prompts
+- use `prompts_auto/` for the auto-generated indexing prompts
 - write artifacts to `output_auto/`
 - use separate cache and logs in `cache_auto/` and `logs_auto/`
 
@@ -165,7 +169,7 @@ source graphrag-env/bin/activate
 GRAPHRAG_CONFIG=settings.auto.yaml python frontend/app.py
 ```
 
-The frontend now derives its output/cache directories from the active config, so the tuned UI reads `output_auto/` automatically.
+The frontend derives its output and cache directories from the active config, so the tuned UI reads `output_auto/` automatically.
 
 ### 4. Compare baseline vs tuned results
 
@@ -174,11 +178,11 @@ Compare the same question against both configs:
 ```bash
 source graphrag-env/bin/activate
 
-python -m graphrag query --root . --config settings.yaml      -m local  -q "What are the main entities and relationships?"
-python -m graphrag query --root . --config settings.auto.yaml -m local  -q "What are the main entities and relationships?"
+./query_graph.sh -m local "What are the main entities and relationships?"
+GRAPHRAG_CONFIG=settings.auto.yaml ./query_graph.sh -m local "What are the main entities and relationships?"
 
-python -m graphrag query --root . --config settings.yaml      -m global -q "What themes dominate this corpus?"
-python -m graphrag query --root . --config settings.auto.yaml -m global -q "What themes dominate this corpus?"
+./query_graph.sh -m global "What themes dominate this corpus?"
+GRAPHRAG_CONFIG=settings.auto.yaml ./query_graph.sh -m global "What themes dominate this corpus?"
 ```
 
 When comparing, look at:
@@ -219,7 +223,7 @@ GRAPHRAG_CONFIG=settings.auto.yaml ./update_graph.sh
 - `prompts/drift_reduce_prompt.txt`
 - `prompts/basic_search_system_prompt.txt`
 
-After changing query prompts, just rerun `graphrag query`.
+After changing query prompts, rerun `./query_graph.sh`.
 
 ## Adding Documents
 
@@ -234,69 +238,23 @@ python extract_pdf.py
 
 Drop one text file per source document into `input/`, then rerun the baseline or tuned pipeline.
 
-## Graph Schema
+## Advanced CLI Usage
 
-### Nodes
+If you want to call the raw GraphRAG 3.x CLI directly, stage the desired config first:
 
-| Label | Key properties |
-|-------|---------------|
-| `Document` | `id`, `title`, `text`, `creation_date`, `metadata` |
-| `TextUnit` | `id`, `text`, `n_tokens` |
-| `Entity` | `id`, `name`, `type`, `description`, `degree`, `x`, `y` |
-| `Claim` | `id`, `covariate_type`, `type`, `description`, `status`, `subject_id`, `object_id` |
-| `Community` | `id`, `community`, `level`, `title`, `size`, `period`, `parent`, `children`, `relationship_ids`, `text_unit_ids`, `is_root`, `is_final` |
-| `CommunityReport` | `id`, `community`, `level`, `parent`, `children`, `title`, `summary`, `full_content`, `findings`, `rank`, `is_root`, `is_final` |
-
-### Edges
-
-| Relationship | From → To | Source |
-|-------------|-----------|--------|
-| `CONTAINS` | `Document` → `TextUnit` | `text_units.document_ids` |
-| `MENTIONED_IN` | `Entity` → `TextUnit` | `text_units.entity_ids` |
-| `RELATED` | `Entity` → `Entity` | `relationships` |
-| `EXTRACTED_FROM` | `Claim` → `TextUnit` | `covariates.text_unit_id` |
-| `ABOUT_SUBJECT` | `Claim` → `Entity` | `covariates.subject_id` |
-| `ABOUT_OBJECT` | `Claim` → `Entity` | `covariates.object_id` |
-| `BELONGS_TO` | `Entity` → `Community` | `communities.entity_ids` |
-| `PARENT_OF` | `Community` → `Community` | `communities.parent` |
-| `SUPPORTED_BY` | `Community` → `TextUnit` | `communities.text_unit_ids` |
-| `DESCRIBES` | `CommunityReport` → `Community` | `community_reports.community` |
-
-## Example Cypher Queries
-
-```cypher
-MATCH (n) RETURN labels(n) AS Type, count(n) AS Count ORDER BY Count DESC
-
-MATCH (e:Entity)
-RETURN e.name, e.type, e.degree
-ORDER BY e.degree DESC
-LIMIT 10
-
-MATCH (e:Entity)-[r:RELATED]->(e2:Entity)
-RETURN e.name, r.description, e2.name
-LIMIT 25
+```bash
+source graphrag-env/bin/activate
+eval "$(python graphrag_runtime.py stage --config settings.auto.yaml --format shell)"
+python -m graphrag query --root "$RUNTIME_ROOT" --data "$OUTPUT_DIR" -m local "What changed after tuning?"
 ```
 
-## Docs
+`query_graph.sh`, `update_graph.sh`, and `auto_tune.sh` already do this for you.
 
-- [docs/README.md](docs/README.md)
-- [docs/auto_tuning.md](docs/auto_tuning.md)
-- [docs/prompts.md](docs/prompts.md)
-- [docs/configuration.md](docs/configuration.md)
-- [docs/search.md](docs/search.md)
-- [docs/neo4j.md](docs/neo4j.md)
+## Documentation
 
-## Troubleshooting
-
-| Problem | Fix |
-|---------|-----|
-| New environment installs GraphRAG 3.x | Recreate the venv and install from `requirements.txt` |
-| Auto-tuned config fails with missing prompt files | Run `./auto_tune.sh` before using `settings.auto.yaml` |
-| Stale baseline results | Re-run `./update_graph.sh` or delete `cache/` |
-| Stale tuned results | Re-run `GRAPHRAG_CONFIG=settings.auto.yaml ./update_graph.sh` or delete `cache_auto/` |
-| Frontend shows the wrong dataset | Launch it with the correct `GRAPHRAG_CONFIG` |
-| Neo4j import reads the wrong output directory | Use `update_graph.sh` instead of calling `import_neo4j.py` manually, or set `OUTPUT_DIR` explicitly |
-
-## License
-
-For educational and research purposes.
+- [Overview](docs/README.md)
+- [Auto Prompt Tuning](docs/auto_tuning.md)
+- [Prompt Reference](docs/prompts.md)
+- [Configuration Reference](docs/configuration.md)
+- [Search Strategies](docs/search.md)
+- [Indexing Pipeline](docs/indexing_pipeline.md)
