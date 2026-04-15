@@ -10,14 +10,44 @@ import shutil
 import time
 import math
 import json as _json
+import yaml
 
 import pandas as pd
 
 # ── Paths (relative to project root, where the app is launched from) ──────────
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+GRAPHRAG_CONFIG = os.getenv('GRAPHRAG_CONFIG', 'settings.yaml')
+if not os.path.isabs(GRAPHRAG_CONFIG):
+    GRAPHRAG_CONFIG = os.path.join(PROJECT_ROOT, GRAPHRAG_CONFIG)
+
+def _resolve_project_path(path_value, fallback_name):
+    """Resolve a project-relative path, preserving absolute paths."""
+    if not path_value:
+        return os.path.join(PROJECT_ROOT, fallback_name)
+    if os.path.isabs(path_value):
+        return path_value
+    return os.path.join(PROJECT_ROOT, path_value)
+
+def _load_graphrag_settings(config_path):
+    """Best-effort YAML loader for deriving output/cache locations from the active config."""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as handle:
+            return yaml.safe_load(handle) or {}
+    except (FileNotFoundError, OSError, yaml.YAMLError):
+        return {}
+
+SETTINGS = _load_graphrag_settings(GRAPHRAG_CONFIG)
+OUTPUT_OVERRIDE = os.getenv('GRAPHRAG_OUTPUT_DIR')
+OUTPUT_FOLDER = _resolve_project_path(
+    OUTPUT_OVERRIDE or SETTINGS.get('output', {}).get('base_dir'),
+    'output',
+)
+CACHE_FOLDER = _resolve_project_path(
+    os.getenv('GRAPHRAG_CACHE_DIR') or SETTINGS.get('cache', {}).get('base_dir'),
+    'cache',
+)
 UPLOAD_FOLDER = os.path.join(PROJECT_ROOT, 'frontend', 'uploads')
 INPUT_FOLDER  = os.path.join(PROJECT_ROOT, 'input')
-OUTPUT_FOLDER = os.path.join(PROJECT_ROOT, 'output')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(INPUT_FOLDER,  exist_ok=True)
 
@@ -94,11 +124,12 @@ def _set_stage(stage):
         pipeline_state["stage"] = stage
     _log(f"[{stage}]")
 
-def _run_step(cmd, cwd=PROJECT_ROOT):
+def _run_step(cmd, cwd=PROJECT_ROOT, env=None):
     """Run a shell command, stream output into the log. Returns True on success."""
     _log(f"$ {' '.join(cmd)}")
     proc = subprocess.Popen(
         cmd, cwd=cwd,
+        env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1
     )
@@ -116,6 +147,9 @@ def run_full_pipeline(pdf_path, stem):
         pipeline_state["error"]  = None
 
     try:
+        _log(f"Using GraphRAG config → {os.path.relpath(GRAPHRAG_CONFIG, PROJECT_ROOT)}")
+        _log(f"Using GraphRAG output → {os.path.relpath(OUTPUT_FOLDER, PROJECT_ROOT)}")
+
         # 1 ─ Extract PDF text ─────────────────────────────────────────────────
         _set_stage("Extracting PDF text")
         from extract_pdf import extract_pdf_text
@@ -132,13 +166,21 @@ def run_full_pipeline(pdf_path, stem):
 
         # 3 ─ Run graphrag index ───────────────────────────────────────────────
         _set_stage("Running GraphRAG indexing (this may take several minutes…)")
-        ok = _run_step(GRAPHRAG_CMD + ['index', '--root', PROJECT_ROOT])
+        index_cmd = GRAPHRAG_CMD + ['index', '--root', PROJECT_ROOT, '--config', GRAPHRAG_CONFIG]
+        if OUTPUT_OVERRIDE:
+            index_cmd += ['--output', OUTPUT_FOLDER]
+        ok = _run_step(index_cmd)
         if not ok:
             raise RuntimeError("graphrag index failed – check the log above.")
 
         # 4 ─ Import to Neo4j ──────────────────────────────────────────────────
         _set_stage("Importing results into Neo4j")
-        ok = _run_step([PYTHON_BIN, os.path.join(PROJECT_ROOT, 'import_neo4j.py')])
+        import_env = dict(os.environ)
+        import_env['OUTPUT_DIR'] = OUTPUT_FOLDER
+        ok = _run_step(
+            [PYTHON_BIN, os.path.join(PROJECT_ROOT, 'import_neo4j.py')],
+            env=import_env,
+        )
         if not ok:
             raise RuntimeError("import_neo4j.py failed – check the log above.")
 
@@ -352,9 +394,8 @@ def api_clear():
         shutil.rmtree(OUTPUT_FOLDER)
 
     # 4. Clear GraphRAG cache
-    cache_dir = os.path.join(PROJECT_ROOT, 'cache')
-    if os.path.exists(cache_dir):
-        shutil.rmtree(cache_dir)
+    if os.path.exists(CACHE_FOLDER):
+        shutil.rmtree(CACHE_FOLDER)
 
     msg = "Cleared." + (f" (warnings: {'; '.join(errors)})" if errors else "")
     return jsonify({"ok": True, "message": msg})

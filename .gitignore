@@ -11,8 +11,12 @@ ENV/
 
 # GraphRAG generated files
 output/
+output_auto/
 cache/
+cache_auto/
 logs/
+logs_auto/
+prompts_auto/
 
 # Data files
 *.parquet
@@ -24,6 +28,7 @@ input/
 frontend/uploads/
 !frontend/uploads/.gitkeep
 !prompts/*.txt
+!requirements.txt
 !README.txt
 
 # Jupyter notebook checkpoints

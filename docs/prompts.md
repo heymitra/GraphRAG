@@ -2,6 +2,14 @@
 
 All prompts live in `prompts/` and are referenced from `settings.yaml`. They use `{variable}` placeholders that GraphRAG fills at runtime. Prompts are plain text files — edit them freely to adapt entity types, output formats, language, or analytical focus.
 
+`./auto_tune.sh` generates tuned indexing prompts into `prompts_auto/` and the companion `settings.auto.yaml` points only the supported auto-generated files at that directory. In this repo's GraphRAG version, auto tuning generates:
+
+- `extract_graph.txt`
+- `summarize_descriptions.txt`
+- `community_report_graph.txt`
+
+It does **not** generate `extract_claims.txt`, `community_report_text.txt`, or any query-time prompts. Those remain manual.
+
 ---
 
 ## Indexing Prompts
@@ -215,7 +223,7 @@ Answers questions from retrieved text chunks with no graph context. Equivalent t
 
 ### `question_gen_system_prompt.txt` — Question Generation
 
-Used by `python -m graphrag query --method question_gen`. Auto-generates candidate questions that the knowledge graph can answer. Useful for exploring corpus coverage.
+This prompt file exists in the GraphRAG prompt pack for question generation workflows. In the pinned `graphrag==2.7.1` CLI used by this repository, the standard `graphrag query` command exposes `local`, `global`, `drift`, and `basic`, so treat `question_gen_system_prompt.txt` as an advanced or future-facing prompt rather than part of the default CLI workflow in this repo.
 
 ---
 
@@ -223,6 +231,7 @@ Used by `python -m graphrag query --method question_gen`. Auto-generates candida
 
 | Goal | Action |
 |------|--------|
+| Generate auto-tuned indexing prompts | Run `./auto_tune.sh`, then index with `GRAPHRAG_CONFIG=settings.auto.yaml ./update_graph.sh` |
 | Add a new entity type | Add to `entity_types` in `settings.yaml` **and** add few-shot examples in `extract_graph.txt` |
 | Change community report structure | Edit the JSON schema definition in `community_report_graph.txt` |
 | Change claim categories | Edit the few-shot examples in `extract_claims.txt` |
@@ -231,4 +240,4 @@ Used by `python -m graphrag query --method question_gen`. Auto-generates candida
 | Domain-specific entity types | Replace the generic entity type list with domain vocabulary (e.g. `drug, gene, disease, symptom` for biomedical) |
 | Change scoring rubric for community reports | Edit the rating instructions in `community_report_graph.txt` |
 
-After changing any prompt file, **clear the LLM cache** (`rm -rf cache/`) before re-indexing. The cache is keyed on input hash, which includes prompt content.
+After changing any indexing prompt file, **clear the matching LLM cache** before re-indexing. Use `cache/` for the baseline config and `cache_auto/` for `settings.auto.yaml`. The cache is keyed on input hash, which includes prompt content.

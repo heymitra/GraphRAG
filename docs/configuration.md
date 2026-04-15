@@ -4,6 +4,8 @@ All pipeline behaviour is controlled from `settings.yaml`. This document annotat
 
 For the full list of available settings see the [official GraphRAG config docs](https://microsoft.github.io/graphrag/config/yaml/).
 
+This repository currently targets the GraphRAG 2.7.x config schema and pins `graphrag==2.7.1` in `requirements.txt`. The companion auto-tuned config lives in `settings.auto.yaml` and uses the same structure with separate prompt/output/cache directories.
+
 ---
 
 ## Models
@@ -287,7 +289,7 @@ drift_search:
   chat_model_id: default_chat_model
   embedding_model_id: default_embedding_model
   prompt: "prompts/drift_search_system_prompt.txt"
-  reduce_prompt: "prompts/drift_search_reduce_prompt.txt"
+  reduce_prompt: "prompts/drift_reduce_prompt.txt"
 
 basic_search:
   chat_model_id: default_chat_model

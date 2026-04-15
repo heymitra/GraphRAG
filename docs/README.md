@@ -12,6 +12,7 @@ Technical documentation for the Microsoft GraphRAG pipeline in this repository, 
 | [Indexing Pipeline](indexing_pipeline.md) | Step-by-step pipeline: chunking, extraction, merging, communities, embeddings, and snapshots — including all concurrency and implementation details |
 | [Data Model](data_model.md) | Schema for every Parquet table, LanceDB, embeddings, GraphML, and provenance chains |
 | [Search Strategies](search.md) | Local, Global, DRIFT, and Basic search — flows, context assembly, token budgets, and when to use each |
+| [Auto Prompt Tuning](auto_tuning.md) | How this repo enables GraphRAG auto tuning, what files it generates, and how to compare baseline vs tuned runs |
 | [Prompts Reference](prompts.md) | Every LLM prompt explained: variables, input/output formats, and customisation guide |
 | [Configuration Reference](configuration.md) | Annotated `settings.yaml` with trade-off notes for every significant setting |
 | [Neo4j Schema](neo4j.md) | Node labels, relationship types, indexes, and Cypher query cookbook |
@@ -30,18 +31,33 @@ Technical documentation for the Microsoft GraphRAG pipeline in this repository, 
 
 ```bash
 source graphrag-env/bin/activate
-rm -rf cache/
-python3 -m graphrag index
-python3 import_neo4j.py
+./update_graph.sh
+```
+
+### Auto-tuned run
+
+```bash
+source graphrag-env/bin/activate
+DOMAIN="your corpus domain" ./auto_tune.sh
+GRAPHRAG_CONFIG=settings.auto.yaml ./update_graph.sh
+GRAPHRAG_CONFIG=settings.auto.yaml python3 frontend/app.py
 ```
 
 ### Query
 
 ```bash
-python3 -m graphrag query --method local  --query "Who is X?"
-python3 -m graphrag query --method global --query "What are the main themes?"
-python3 -m graphrag query --method drift  --query "Analyse the relationship between X and Y"
-python3 -m graphrag query --method basic  --query "Find documents about Z"
+python3 -m graphrag query --root . --config settings.yaml -m local  -q "Who is X?"
+python3 -m graphrag query --root . --config settings.yaml -m global -q "What are the main themes?"
+python3 -m graphrag query --root . --config settings.auto.yaml -m local -q "Who is X?"
+```
+
+### Manual indexing steps
+
+```bash
+source graphrag-env/bin/activate
+rm -rf cache/
+python3 -m graphrag index --root . --config settings.yaml
+python3 import_neo4j.py
 ```
 
 ---

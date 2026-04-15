@@ -1,0 +1,9 @@
+graphrag==2.7.1
+neo4j
+pandas
+jupyter
+matplotlib
+networkx
+PyPDF2
+flask
+werkzeug
