@@ -251,7 +251,7 @@
       <div class="modal-header">
         <div>
           <div class="modal-title">Upload PDF for Extraction</div>
-          <p class="modal-subtitle">Choose an extraction mode. After indexing, the document panel shows the exact prompt used.</p>
+          <p class="modal-subtitle">Each upload indexes <strong>only that file</strong> — other files in the corpus are not reprocessed. Choose an extraction mode; the exact prompts used are recorded and visible in the document panel afterwards.</p>
         </div>
         <button class="modal-close" id="closeModal">✕</button>
       </div>
@@ -276,9 +276,9 @@
             <div class="mode-card-name">{{ mode.label }}</div>
             <div class="mode-card-desc">
               {% if mode.key == 'baseline' %}
-              Uses fixed prompts from <code>prompts/</code>. Reproducible — same output for the same input.
+              Uses fixed prompts from <code>prompts/</code>. Fast and reproducible — identical output for the same input, no tuning cost.
               {% else %}
-              Runs prompt auto-tuning before indexing. Adapts entity types and instructions to the document's domain.
+              Runs prompt auto-tuning on the uploaded file first, then indexes. Adapts entity types and instructions to the document's specific domain.
               {% endif %}
             </div>
             <div class="mode-card-pipeline">{{ mode.pipeline_path }}</div>
@@ -741,6 +741,7 @@
           return;
         }
 
+        const documentInfo = data.document || {};
         const record  = data.record || {};
         const entries = data.entries || [];
         const selected = data.selected || null;
@@ -752,11 +753,18 @@
         const badgeLabel  = isAutoTuned ? 'Auto-Tuned' : 'Default';
 
         documentPromptSummary.innerHTML =
-          `${esc(record.document_title || documentKey)} &nbsp;<span class="prompt-mode-badge ${badgeClass}">${esc(badgeLabel)}</span>`;
+          `${esc(documentInfo.title || documentKey)} &nbsp;<span class="prompt-mode-badge ${badgeClass}">${esc(badgeLabel)}</span>`;
         document.getElementById('documentPromptSubtitle').textContent =
           `Recorded ${record.recorded_at || 'unknown'} · Pipeline: ${record.pipeline_path || 'unavailable'}`;
+        const runMeta = [];
+        if (record.manifest_path) runMeta.push(record.manifest_path);
+        if (record.uploaded_filename) runMeta.push(`Run upload ${record.uploaded_filename}`);
+        if (record.document_count) runMeta.push(`${record.document_count} docs in run`);
+        if (record.matched_via === 'run') runMeta.push('Applied from current dataset run');
         documentPromptMeta.textContent =
-          `${record.prompt_count || entries.length || 0} prompt snapshots · ${record.manifest_path || ''} · ${formatAutoTuneOptions(record.auto_tune_options)}`;
+          [`${entries.length || 0} indexing prompt snapshots`, ...runMeta, formatAutoTuneOptions(record.auto_tune_options)]
+            .filter(Boolean)
+            .join(' · ');
 
         documentPromptSelect.innerHTML = entries.map(e =>
           `<option value="${esc(e.key)}">${esc(e.category)} · ${esc(e.label)}</option>`
@@ -830,7 +838,7 @@
         if (doc.characters)   statParts.push(`${(doc.characters / 1000).toFixed(0)}k chars`);
 
         const promptsBtn = hasSnap
-          ? `<button class="sdc-prompts-btn" data-doc-prompt="${esc(doc.selection_key)}">View Prompts →</button>`
+          ? `<button class="sdc-prompts-btn" data-doc-prompt="${esc(doc.selection_key)}">View Indexed Prompts →</button>`
           : `<div class="sdc-no-snapshot">No prompt snapshot yet — re-upload to record</div>`;
 
         return `
@@ -1194,7 +1202,11 @@
       const activeEnts = new Set(allEntities.filter(e=>isDocumentVisible(e.document_keys)).map(e=>e.name));
       const filtered = allRels.filter(r =>
         ((r.source||'').toLowerCase().includes(q)||(r.target||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q)) &&
-        (activeEnts.has(r.source)||activeEnts.has(r.target))
+        (
+          (r.document_keys && r.document_keys.length)
+            ? isDocumentVisible(r.document_keys)
+            : (activeEnts.has(r.source)||activeEnts.has(r.target))
+        )
       );
       setCount('relationships', filtered.length);
       drawRelList(filtered);
@@ -1245,7 +1257,7 @@
       const ss=document.getElementById('claimStatusFilter').value;
       const filtered=allClaims.filter(c=>
         (!q||(c.type||'').toLowerCase().includes(q)||(c.description||'').toLowerCase().includes(q)||(c.subject||'').toLowerCase().includes(q)||(c.object&&c.object.toUpperCase()!=='NONE'?c.object.toLowerCase().includes(q):false))&&
-        (!ts||c.type===ts)&&(!ss||c.status===ss)&&isDocumentVisible(c.document_key?[c.document_key]:[])
+        (!ts||c.type===ts)&&(!ss||c.status===ss)&&isDocumentVisible(c.document_keys||[])
       );
       setCount('claims',filtered.length);
       drawClaimTable(filtered);

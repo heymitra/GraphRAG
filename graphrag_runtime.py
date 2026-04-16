@@ -524,7 +524,25 @@ def stage_runtime_config(
     cache_override: str | None = None,
     reporting_override: str | None = None,
     for_prompt_tune: bool = False,
+    file_pattern: str | None = None,
+    runtime_suffix: str | None = None,
 ) -> RuntimeConfigInfo:
+    """Stage a GraphRAG config into a runtime root with absolute paths.
+
+    Args:
+        config_path: Path to the GraphRAG settings YAML to stage.
+        project_root: Repository root (used to resolve relative paths).
+        output_override: Override the configured output directory.
+        cache_override: Override the configured cache directory.
+        reporting_override: Override the configured reporting directory.
+        for_prompt_tune: Stage a prompt-tune-safe config (rewrites prompts_auto → prompts).
+        file_pattern: Optional regex to inject as ``input.file_pattern``.
+            When set, GraphRAG will only index files whose names match this pattern,
+            allowing single-file indexing without touching other files in input/.
+        runtime_suffix: Optional extra suffix for the ``.graphrag-runtime/`` subdirectory.
+            Use this to create a unique runtime root for a per-upload run so it does not
+            overwrite the default pre-staged config used for dataset browsing.
+    """
     resolved_config = resolve_config_path(str(config_path), project_root=project_root)
     settings = load_settings(resolved_config)
     staged = copy.deepcopy(settings)
@@ -563,6 +581,10 @@ def stage_runtime_config(
     if "vector_store" in staged:
         _set_nested(staged, "vector_store", "db_uri", value=vector_store_uri)
 
+    # Restrict which files GraphRAG indexes (single-file upload support).
+    if file_pattern is not None:
+        _set_nested(staged, "input", "file_pattern", value=file_pattern)
+
     if for_prompt_tune:
         _fallback_prompt_directory(
             staged,
@@ -572,10 +594,18 @@ def stage_runtime_config(
         )
     _absolutize_prompt_paths(staged, project_root=project_root)
 
+    # Determine the suffix for the runtime root directory.
+    if for_prompt_tune:
+        root_suffix = "prompt_tune"
+    elif runtime_suffix:
+        root_suffix = runtime_suffix
+    else:
+        root_suffix = None
+
     runtime_root = _runtime_root_for(
         resolved_config,
         project_root=project_root,
-        suffix="prompt_tune" if for_prompt_tune else None,
+        suffix=root_suffix,
     )
     runtime_root.mkdir(parents=True, exist_ok=True)
 

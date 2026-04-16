@@ -9,6 +9,7 @@ import threading
 import shutil
 import time
 import math
+import re
 import json as _json
 import hashlib
 import uuid
@@ -119,6 +120,8 @@ PROMPT_UI_FIELDS = (
         'path': ('basic_search', 'prompt'),
     },
 )
+
+INDEXING_PROMPT_CATEGORY = 'Indexing'
 
 AUTO_TUNE_FORM_FIELDS = {
     'domain': 'DOMAIN',
@@ -305,6 +308,56 @@ def _selection_key(title, doc_id):
     return title if title else str(doc_id)
 
 
+def _normalize_optional_text(value):
+    raw = str(value or '').strip()
+    if raw in {'', 'nan', 'None'}:
+        return ''
+    return raw
+
+
+def _unique_values(values):
+    seen = set()
+    items = []
+    for value in values:
+        raw = _normalize_optional_text(value)
+        if not raw or raw in seen:
+            continue
+        seen.add(raw)
+        items.append(raw)
+    return items
+
+
+def _text_unit_document_ids(row):
+    doc_ids = _to_list(row.get('document_ids'))
+    if doc_ids:
+        return _unique_values(doc_ids)
+    document_id = _normalize_optional_text(row.get('document_id'))
+    return [document_id] if document_id else []
+
+
+def _document_keys_for_ids(doc_ids, doc_id_to_key):
+    return [
+        key for key in (
+            doc_id_to_key.get(str(doc_id))
+            for doc_id in _unique_values(doc_ids)
+        )
+        if key
+    ]
+
+
+def _documents_from_frame(docs_df):
+    documents = []
+    for _, row in docs_df.iterrows():
+        doc_id = str(row['id'])
+        title = row.get('title', '') or ''
+        documents.append({
+            'id': doc_id,
+            'title': title,
+            'selection_key': _selection_key(title, doc_id),
+        })
+    return documents
+
+
 def _format_timestamp(value):
     raw = str(value or '').strip()
     if raw in {'', 'nan', 'None'}:
@@ -366,11 +419,14 @@ def _prompt_audit_index_path(mode):
     return os.path.join(_prompt_audit_mode_dir(mode), 'history.jsonl')
 
 
-def _prompt_entries_for_mode(mode):
+def _prompt_entries_for_mode(mode, *, categories=None):
     config_path = _mode_state(mode)['config_path']
     settings = load_settings(config_path)
+    allowed_categories = set(categories or [])
     entries = []
     for spec in PROMPT_UI_FIELDS:
+        if allowed_categories and spec['category'] not in allowed_categories:
+            continue
         raw_path = _nested_value(settings, *spec['path'])
         if not raw_path:
             continue
@@ -407,8 +463,14 @@ def _record_prompt_audit(mode, document_title, uploaded_filename, auto_tune_opti
     run_dir = os.path.join(_prompt_audit_mode_dir(mode), run_id)
     os.makedirs(run_dir, exist_ok=True)
 
+    indexed_documents = _documents_from_frame(_parquet('documents.parquet', mode))
+    prompt_entries = _prompt_entries_for_mode(
+        mode,
+        categories={INDEXING_PROMPT_CATEGORY},
+    )
+
     prompts = []
-    for entry in _prompt_entries_for_mode(mode):
+    for entry in prompt_entries:
         prompt_path = entry['path']
         if not os.path.exists(prompt_path):
             continue
@@ -434,6 +496,9 @@ def _record_prompt_audit(mode, document_title, uploaded_filename, auto_tune_opti
         'recorded_at': time.strftime('%Y-%m-%d %H:%M', time.localtime()),
         'document_title': document_title,
         'document_key': doc_key,
+        'document_count': len(indexed_documents),
+        'document_keys': [doc['selection_key'] for doc in indexed_documents],
+        'documents': indexed_documents,
         'uploaded_filename': uploaded_filename,
         'config_path': os.path.relpath(mode_state['config_path'], PROJECT_ROOT),
         'output_dir': os.path.relpath(mode_state['output_dir'], PROJECT_ROOT),
@@ -454,6 +519,8 @@ def _record_prompt_audit(mode, document_title, uploaded_filename, auto_tune_opti
         'recorded_at': manifest['recorded_at'],
         'document_title': document_title,
         'document_key': doc_key,
+        'document_count': len(indexed_documents),
+        'document_keys': manifest['document_keys'],
         'uploaded_filename': uploaded_filename,
         'config_path': manifest['config_path'],
         'output_dir': manifest['output_dir'],
@@ -476,11 +543,49 @@ def _record_prompt_audit(mode, document_title, uploaded_filename, auto_tune_opti
     return summary
 
 
+def _prompt_audit_document_keys(record):
+    keys = _unique_values(record.get('document_keys') or [])
+    if keys:
+        return keys
+    docs = record.get('documents')
+    if isinstance(docs, list):
+        keys = _unique_values(
+            (
+                item.get('selection_key')
+                or item.get('document_key')
+                or item.get('title')
+            )
+            for item in docs
+            if isinstance(item, dict)
+        )
+        if keys:
+            return keys
+    fallback = (
+        record.get('document_key')
+        or record.get('uploaded_document_key')
+        or record.get('document_title')
+    )
+    return [fallback] if fallback else []
+
+
+def _prompt_audit_has_explicit_dataset_mapping(record):
+    if record.get('document_keys'):
+        return True
+    docs = record.get('documents')
+    return isinstance(docs, list) and bool(docs)
+
+
 def _load_prompt_audit_index(mode):
     path = _prompt_audit_index_path(mode)
-    records = {}
+    by_document_key = {}
+    records = []
+    latest = None
     if not os.path.exists(path):
-        return records
+        return {
+            'records': records,
+            'by_document_key': by_document_key,
+            'latest': latest,
+        }
     with open(path, 'r', encoding='utf-8') as handle:
         for raw_line in handle:
             line = raw_line.strip()
@@ -490,10 +595,42 @@ def _load_prompt_audit_index(mode):
                 record = _json.loads(line)
             except ValueError:
                 continue
-            key = record.get('document_key') or record.get('document_title')
-            if key:
-                records[key] = record
-    return records
+            records.append(record)
+            latest = record
+            for key in _prompt_audit_document_keys(record):
+                by_document_key[key] = record
+            title = record.get('document_title')
+            if title:
+                by_document_key[title] = record
+    return {
+        'records': records,
+        'by_document_key': by_document_key,
+        'latest': latest,
+    }
+
+
+def _match_prompt_audit_record(audit_index, document_key, title=''):
+    by_document_key = audit_index.get('by_document_key', {})
+    record = by_document_key.get(document_key)
+    if not record and title:
+        record = by_document_key.get(title)
+    if record:
+        return record, 'document'
+
+    latest = audit_index.get('latest')
+    if not latest:
+        return None, None
+
+    if not _prompt_audit_has_explicit_dataset_mapping(latest):
+        return latest, 'run'
+
+    latest_keys = _prompt_audit_document_keys(latest)
+    if latest_keys:
+        if document_key in latest_keys or (title and title in latest_keys):
+            return latest, 'run'
+        return None, None
+
+    return latest, 'run'
 
 
 def _load_prompt_audit_manifest(mode, run_id):
@@ -518,6 +655,15 @@ def _parse_auto_tune_options(form_data):
             'true' if str(discover_entity_types).lower() in {'1', 'true', 'on', 'yes'} else 'false'
         )
     return options
+
+
+def _single_file_input_pattern(stem):
+    """Match one uploaded text file against GraphRAG's full-path storage search."""
+    # GraphRAG 3.x applies input.file_pattern to the full storage path string,
+    # not just the basename. We therefore anchor only the filename tail.
+    # The YAML is later passed through string.Template, so we must write the
+    # final '$' as '$$' here to preserve it after config loading.
+    return rf"(^|[\\/]){re.escape(stem)}\.txt$$"
 
 
 def _build_layout_positions(ents_df, rels_df):
@@ -618,10 +764,14 @@ def _validate_mode_config(mode, *, allow_missing_tuned_prompts=False):
 
 
 def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
-    """Background thread: extract → prompt tune (optional) → graphrag index."""
+    """Background thread: extract → prompt tune (optional) → graphrag index.
+
+    A per-upload staged runtime config is created with ``input.file_pattern``
+    restricted to the newly uploaded file, so GraphRAG only indexes that single
+    document even when other .txt files exist in input/.
+    """
     mode_state = _mode_state(mode)
     graphrag_config = mode_state['config_path']
-    runtime_root = mode_state['runtime_root']
     output_folder = mode_state['output_dir']
     vector_store_dir = mode_state['vector_store_dir']
     auto_tune_on_upload = mode_state['auto_tune_on_upload']
@@ -638,8 +788,6 @@ def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
     try:
         _log(f"Selected upload mode → {mode_label}")
         _log(f"Using GraphRAG config → {os.path.relpath(graphrag_config, PROJECT_ROOT)}")
-        _log(f"Using GraphRAG runtime root → {os.path.relpath(runtime_root, PROJECT_ROOT)}")
-        _log(f"Using GraphRAG output → {os.path.relpath(output_folder, PROJECT_ROOT)}")
         _log(
             "Automatic prompt tuning on upload → "
             + ("enabled" if auto_tune_on_upload else "disabled")
@@ -649,17 +797,56 @@ def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
         _set_stage("Extracting PDF text")
         from extract_pdf import extract_pdf_text
         output_txt = os.path.join(INPUT_FOLDER, f"{stem}.txt")
-        # Keeps existing input files to run GraphRAG incrementally
+        # Keep existing input files in input/; file_pattern restricts this run to the new file.
         result = extract_pdf_text(pdf_path, output_txt)
         if result is None:
             raise RuntimeError("PDF extraction returned no text.")
         _log(f"Saved extracted text → {output_txt}")
 
-        # 2 ─ Auto prompt tuning for the tuned config ─────────────────────────
+        # ── Build a per-upload staged runtime config with single-file restriction ───────
+        # GraphRAG has no --input-file flag; it always reads all files in input/.
+        # We inject input.file_pattern into the staged settings.yaml to restrict
+        # this specific indexing run to only the newly uploaded file.
+        #
+        # IMPORTANT: GraphRAG's config loader uses Python string.Template.substitute() to
+        # expand ${ENV_VAR} references.  A bare `$` not in `${...}` or `$$` raises:
+        #   ValueError: Invalid placeholder in string
+        # We use `$$` as the end-of-string anchor in the YAML value; Template converts
+        # `$$` → `$` at load time, so the effective regex GraphRAG sees is
+        # `(^|[\\/])stem\.txt$` and still matches the full absolute path.
+        single_file_pattern = _single_file_input_pattern(stem)
+        _log(f"Restricting GraphRAG input to pattern \u2192 {single_file_pattern.replace('$$', '$')}")
+
+        # Safe alphanumeric suffix (max 48 chars) for the runtime root directory name.
+        safe_stem = re.sub(r"[^a-zA-Z0-9_]", "_", stem)[:48]
+
+        per_file_runtime_info = stage_runtime_config(
+            MODE_CONFIG_REQUESTS[mode],
+            output_override=OUTPUT_OVERRIDE if mode == DEFAULT_VIEW_MODE else None,
+            cache_override=CACHE_OVERRIDE  if mode == DEFAULT_VIEW_MODE else None,
+            file_pattern=single_file_pattern,
+            runtime_suffix=safe_stem,
+        )
+        runtime_root = per_file_runtime_info.runtime_root
+        _log(f"Using GraphRAG runtime root → {os.path.relpath(runtime_root, PROJECT_ROOT)}")
+        _log(f"Using GraphRAG output → {os.path.relpath(output_folder, PROJECT_ROOT)}")
+
+        # 2 ─ Auto prompt tuning (tuned config only) ───────────────────────────
         if auto_tune_on_upload:
-            _set_stage("Auto-tuning prompts from the current input corpus")
+            _set_stage("Auto-tuning prompts from the input corpus")
+
+            # Pass the ORIGINAL settings file (not our per-file staged runtime config).
+            #
+            # auto_tune.sh does its own internal staging via `graphrag_runtime.py stage`.
+            # If we pass a pre-staged config as GRAPHRAG_CONFIG, auto_tune.sh re-stages
+            # it into a deeply nested runtime root, which confuses GraphRAG's input reader
+            # and causes "No <pattern> matches found in storage" errors.
+            #
+            # Prompt-tuning also benefits from reading the full corpus (not just the new
+            # file) to better understand the domain. Per-file restriction is only needed
+            # for `graphrag index` in step 5, which uses our per_file_runtime_info root.
             auto_tune_env = dict(os.environ)
-            auto_tune_env['GRAPHRAG_CONFIG'] = graphrag_config
+            auto_tune_env['GRAPHRAG_CONFIG'] = graphrag_config   # e.g. settings.auto.yaml
             for env_name, value in (auto_tune_options or {}).items():
                 auto_tune_env[env_name] = value
                 _log(f"Auto-tune option → {env_name}={value}")
@@ -671,8 +858,6 @@ def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
                 raise RuntimeError("auto_tune.sh failed – check the log above.")
         else:
             _validate_mode_config(mode)
-
-        _validate_mode_config(mode)
 
         # 3 ─ Reset the vector store output ───────────────────────────────────
         _set_stage("Resetting vector store")
@@ -692,7 +877,7 @@ def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
         _set_stage("Keeping cache for incremental indexing")
         _log("Cache retained.")
 
-        # 5 ─ Run graphrag index ───────────────────────────────────────────────
+        # 5 ─ Run graphrag index using the per-upload runtime root ─────────────
         _set_stage("Running GraphRAG indexing (this may take several minutes…)")
         index_cmd = GRAPHRAG_CMD + ['index', '--root', runtime_root]
         ok = _run_step(index_cmd)
@@ -847,15 +1032,16 @@ def api_data():
                         'communities': [], 'relationships': [], 'stats': [],
                         'mode': mode, 'mode_label': _mode_state(mode)['label']})
 
-    prompt_audit_by_key = _load_prompt_audit_index(mode)
+    prompt_audit_index = _load_prompt_audit_index(mode)
     doc_meta_by_id = {}
     for _, row in docs_df.iterrows():
         doc_id = str(row['id'])
         title = row.get('title', '') or ''
         selection_key = _selection_key(title, doc_id)
-        prompt_audit = (
-            prompt_audit_by_key.get(selection_key)
-            or prompt_audit_by_key.get(title)
+        prompt_audit, prompt_audit_match = _match_prompt_audit_record(
+            prompt_audit_index,
+            selection_key,
+            title=title,
         )
         doc_meta_by_id[doc_id] = {
             'id': doc_id,
@@ -874,6 +1060,11 @@ def api_data():
             'prompt_audit_extract_graph_sha256': prompt_audit.get('extract_graph_sha256') if prompt_audit else '',
             'prompt_audit_mode_label': prompt_audit.get('mode_label') if prompt_audit else '',
             'prompt_audit_pipeline_path': prompt_audit.get('pipeline_path') if prompt_audit else '',
+            'prompt_audit_match': prompt_audit_match or '',
+            'prompt_audit_uploaded_filename': prompt_audit.get('uploaded_filename') if prompt_audit else '',
+            'prompt_audit_document_count': (
+                prompt_audit.get('document_count') if prompt_audit else 0
+            ),
             'prompt_audit_auto_tune_on_upload': (
                 bool(prompt_audit.get('auto_tune_on_upload'))
                 if prompt_audit else False
@@ -887,14 +1078,13 @@ def api_data():
     # ── text_unit_id → [document_ids] lookup ─────────────────────────────────
     tu_to_docs = {}
     for _, row in tu_df.iterrows():
-        doc_ids = _to_list(row.get('document_ids'))
+        doc_ids = _text_unit_document_ids(row)
         if doc_ids:
             tu_to_docs[str(row['id'])] = doc_ids
             for did in doc_ids:
                 meta = doc_meta_by_id.get(str(did))
                 if meta:
                     meta['text_units'] += 1
-    tu_to_first_doc = {k: v[0] for k, v in tu_to_docs.items()}
     doc_id_to_key = {
         doc_id: meta['selection_key']
         for doc_id, meta in doc_meta_by_id.items()
@@ -920,14 +1110,9 @@ def api_data():
             'degree':      int(row.get('degree', 0) or 0),
             'frequency':   int(row.get('frequency', 0) or 0),
             'document_ids': doc_ids,
-            'document_keys': [
-                doc_id_to_key[str(did)]
-                for did in doc_ids
-                if str(did) in doc_id_to_key
-            ],
+            'document_keys': _document_keys_for_ids(doc_ids, doc_id_to_key),
         })
     entities.sort(key=lambda x: x['degree'], reverse=True)
-    entities = entities[:300]
 
     # ── Claims / Covariates ───────────────────────────────────────────────────
     claims = []
@@ -935,9 +1120,9 @@ def api_data():
         tu_id = str(row.get('text_unit_id', '') or '')
         raw_start = str(row.get('start_date', '') or '')
         raw_end   = str(row.get('end_date',   '') or '')
-        document_id = tu_to_first_doc.get(tu_id)
-        if document_id is not None:
-            meta = doc_meta_by_id.get(str(document_id))
+        doc_ids = tu_to_docs.get(tu_id, [])
+        for did in doc_ids:
+            meta = doc_meta_by_id.get(str(did))
             if meta:
                 meta['claim_count'] += 1
         claims.append({
@@ -949,10 +1134,9 @@ def api_data():
             'object':      row.get('object_id', '') or '',
             'start_date':  raw_start[:10] if raw_start not in ('', 'nan', 'None') else '',
             'end_date':    raw_end[:10]   if raw_end   not in ('', 'nan', 'None') else '',
-            'document_id': document_id,
-            'document_key': doc_id_to_key.get(str(document_id), ''),
+            'document_ids': doc_ids,
+            'document_keys': _document_keys_for_ids(doc_ids, doc_id_to_key),
         })
-    claims = claims[:300]
 
     # ── Communities ───────────────────────────────────────────────────────────
     # community_reports has AI titles + summaries; communities has entity_ids
@@ -996,14 +1180,20 @@ def api_data():
     # ── Relationships ─────────────────────────────────────────────────────────
     relationships = []
     for _, row in rels_df.iterrows():
+        doc_ids = []
+        for tu_id in _to_list(row.get('text_unit_ids')):
+            for did in tu_to_docs.get(str(tu_id), []):
+                if did not in doc_ids:
+                    doc_ids.append(did)
         relationships.append({
             'source':      row.get('source', '') or '',
             'target':      row.get('target', '') or '',
             'description': row.get('description', '') or '',
             'weight':      float(row.get('weight', 1.0) or 1.0),
+            'document_ids': doc_ids,
+            'document_keys': _document_keys_for_ids(doc_ids, doc_id_to_key),
         })
     relationships.sort(key=lambda x: x['weight'], reverse=True)
-    relationships = relationships[:100]
 
     # ── Stats ─────────────────────────────────────────────────────────────────
     stats = [
@@ -1087,8 +1277,30 @@ def api_document_prompts():
     if not document_key:
         return jsonify({'error': 'Missing document_key.', 'mode': mode}), 400
 
-    history = _load_prompt_audit_index(mode)
-    record = history.get(document_key)
+    current_documents = {
+        doc['selection_key']: doc
+        for doc in _documents_from_frame(_parquet('documents.parquet', mode))
+    }
+    current_document = current_documents.get(document_key)
+    if current_document is None:
+        current_document = next(
+            (
+                doc for doc in current_documents.values()
+                if doc['title'] == document_key
+            ),
+            {
+                'id': '',
+                'title': document_key,
+                'selection_key': document_key,
+            },
+        )
+
+    audit_index = _load_prompt_audit_index(mode)
+    record, matched_via = _match_prompt_audit_record(
+        audit_index,
+        document_key,
+        title=current_document.get('title', ''),
+    )
     if not record:
         return jsonify({
             'error': 'No prompt provenance has been recorded for this document yet.',
@@ -1107,7 +1319,12 @@ def api_document_prompts():
             'record': record,
         }), 404
 
-    entries = manifest.get('prompts', [])
+    entries = [
+        entry for entry in manifest.get('prompts', [])
+        if entry.get('category') == INDEXING_PROMPT_CATEGORY
+    ]
+    if not entries:
+        entries = manifest.get('prompts', [])
     selected = next((entry for entry in entries if entry.get('key') == requested_key), None)
     if selected is None and entries:
         selected = entries[0]
@@ -1122,7 +1339,11 @@ def api_document_prompts():
     return jsonify({
         'mode': mode,
         'mode_label': _mode_state(mode)['label'],
-        'record': record,
+        'document': current_document,
+        'record': {
+            **record,
+            'matched_via': matched_via,
+        },
         'entries': entries,
         'selected': (
             {
@@ -1268,7 +1489,7 @@ def api_umap():
     # ── text_unit → document_ids mapping ─────────────────────────────────────
     tu_to_docs = {}
     for _, row in tu_df.iterrows():
-        doc_ids = _to_list(row.get('document_ids'))
+        doc_ids = _text_unit_document_ids(row)
         if doc_ids:
             tu_to_docs[str(row['id'])] = doc_ids
 
@@ -1305,11 +1526,7 @@ def api_umap():
             'x': x, 'y': y,
             **comm_fields,
             'document_ids':    doc_ids,
-            'document_keys':   [
-                doc_id_to_key[str(did)]
-                for did in doc_ids
-                if str(did) in doc_id_to_key
-            ],
+            'document_keys': _document_keys_for_ids(doc_ids, doc_id_to_key),
         })
 
     # ── Edges ─────────────────────────────────────────────────────────────────
