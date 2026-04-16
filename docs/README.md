@@ -11,6 +11,7 @@ Technical documentation for the Microsoft GraphRAG pipeline in this repository, 
 | [Data Model](data_model.md) | Schema for the parquet outputs, LanceDB, embeddings, and provenance |
 | [Search Strategies](search.md) | Local, Global, DRIFT, and Basic search behavior |
 | [Auto Prompt Tuning](auto_tuning.md) | How this repo runs GraphRAG auto tuning on 3.0.6 |
+| [Auto-Tuning Deep Dive](graphrag_auto_tuning_deep_dive.md) | Implementation-level explanation of upstream GraphRAG prompt-tune behavior, pipeline equivalence, canonicalization limits, and suggested comparison experiments |
 | [Prompts Reference](prompts.md) | Every prompt file used by the repo |
 | [Configuration Reference](configuration.md) | Annotated `settings.yaml` and `settings.auto.yaml` |
 | [Neo4j Schema](neo4j.md) | Node labels, relationship types, indexes, and Cypher examples |

@@ -2,6 +2,8 @@
 
 This repository supports Microsoft GraphRAG auto tuning on **GraphRAG 3.0.6**.
 
+For a code-level explanation of upstream GraphRAG prompt tuning behavior, what changes between baseline and auto-tuned indexing, why there is no dedicated canonicalization stage, and which flags are worth testing, see [GraphRAG Auto-Tuning Deep Dive](graphrag_auto_tuning_deep_dive.md).
+
 ## What Auto Tuning Covers
 
 In GraphRAG 3.0.6, `prompt-tune` generates only three indexing prompts:
