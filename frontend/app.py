@@ -807,13 +807,14 @@ def _build_layout_positions(ents_df, rels_df):
     """Use saved coordinates when present, otherwise derive a stable spring layout."""
     positions = {}
     graph = nx.Graph()
-    has_saved_layout = True
+    named_nodes = 0
 
     for _, row in ents_df.iterrows():
         name = row.get('title', '') or ''
         if not name:
             continue
         graph.add_node(name)
+        named_nodes += 1
         try:
             x = float(row.get('x'))
             y = float(row.get('y'))
@@ -821,7 +822,7 @@ def _build_layout_positions(ents_df, rels_df):
                 raise ValueError
             positions[name] = (x, y)
         except (TypeError, ValueError):
-            has_saved_layout = False
+            pass  # will fall back to spring_layout if coverage is incomplete
 
     for _, row in rels_df.iterrows():
         src = row.get('source', '') or ''
@@ -837,7 +838,8 @@ def _build_layout_positions(ents_df, rels_df):
     if graph.number_of_nodes() == 0:
         return {}
 
-    if has_saved_layout and positions:
+    # Only trust saved positions if every named entity has valid coordinates.
+    if named_nodes > 0 and len(positions) == named_nodes:
         return positions
 
     if graph.number_of_edges() == 0:

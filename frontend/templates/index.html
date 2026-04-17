@@ -1512,12 +1512,26 @@
           return;
         }
         umapNodes=data.nodes;umapEdges=data.edges;
+        const availCommLevels=new Set(data.comm_levels||[]);
         const levelLabels={0:'Broad',1:'Detailed',2:'Fine'};
-        (data.comm_levels||[]).forEach(L=>{
+        [0,1,2].forEach(L=>{
           const btn=document.getElementById(`commLvl${L}`);if(!btn)return;
-          const unique=new Set(umapNodes.map(n=>n[`community_l${L}`]).filter(v=>v!=null)).size;
-          btn.textContent=`${levelLabels[L]||`L${L}`} · ${unique}`;
-          btn.title=`${unique} communities at this level`;
+          if(availCommLevels.has(L)){
+            const unique=new Set(umapNodes.map(n=>n[`community_l${L}`]).filter(v=>v!=null)).size;
+            btn.textContent=`${levelLabels[L]||`L${L}`} · ${unique}`;
+            btn.title=`${unique} communities at this level`;
+            btn.disabled=false;btn.style.opacity='';
+          } else {
+            btn.textContent=levelLabels[L]||`L${L}`;
+            btn.title='No data at this granularity for the current run';
+            btn.disabled=true;btn.style.opacity='0.35';
+            // If the currently active level is unavailable, reset to the coarsest available
+            if(umapCommLevel===L){
+              const fallback=[...availCommLevels].sort((a,b)=>a-b)[0]??0;
+              umapCommLevel=fallback;
+              [0,1,2].forEach(l=>{const b=document.getElementById(`commLvl${l}`);if(b)b.classList.toggle('active',l===fallback);});
+            }
+          }
         });
         const degrees=umapNodes.map(n=>n.degree).sort((a,b)=>a-b);
         document.getElementById('minDegree').max=degrees[Math.floor(degrees.length*.95)]||20;
@@ -1537,8 +1551,10 @@
     }
 
     function setCommLevel(level){
+      const btn=document.getElementById(`commLvl${level}`);
+      if(btn&&btn.disabled) return;  // level not available for this run
       umapCommLevel=level;
-      [0,1,2].forEach(L=>{const btn=document.getElementById(`commLvl${L}`);if(btn)btn.classList.toggle('active',L===level);});
+      [0,1,2].forEach(L=>{const b=document.getElementById(`commLvl${L}`);if(b)b.classList.toggle('active',L===level);});
       renderUmap();
     }
 
@@ -1588,8 +1604,8 @@
         paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',
         font:{color:'#e2e8f0',family:'Inter, sans-serif',size:12},
         margin:{t:12,r:12,b:40,l:40},
-        xaxis:{showgrid:true,gridcolor:'rgba(255,255,255,0.05)',zeroline:false,tickfont:{color:'#8892a4',size:10},title:{text:'UMAP-1',font:{color:'#8892a4',size:11}}},
-        yaxis:{showgrid:true,gridcolor:'rgba(255,255,255,0.05)',zeroline:false,tickfont:{color:'#8892a4',size:10},title:{text:'UMAP-2',font:{color:'#8892a4',size:11}}},
+        xaxis:{showgrid:true,gridcolor:'rgba(255,255,255,0.05)',zeroline:false,tickfont:{color:'#8892a4',size:10},title:{text:'Graph X',font:{color:'#8892a4',size:11}}},
+        yaxis:{showgrid:true,gridcolor:'rgba(255,255,255,0.05)',zeroline:false,tickfont:{color:'#8892a4',size:10},title:{text:'Graph Y',font:{color:'#8892a4',size:11}}},
         legend:{bgcolor:'rgba(26,29,39,0.7)',bordercolor:'rgba(255,255,255,0.05)',borderwidth:1,font:{color:'#e2e8f0',size:11},itemsizing:'constant',x:1.01,y:1,xanchor:'left',yanchor:'top'},
         hovermode:'closest',hoverlabel:{bgcolor:'#1a1d27',bordercolor:'rgba(255,255,255,0.08)',font:{color:'#e2e8f0',size:12,family:'Inter, sans-serif'},align:'left'},
         dragmode:'pan',
@@ -1597,7 +1613,7 @@
       const config={responsive:true,scrollZoom:true,displayModeBar:true,modeBarButtonsToRemove:['select2d','lasso2d','autoScale2d','hoverClosestCartesian','hoverCompareCartesian'],displaylogo:false,toImageButtonOptions:{format:'png',scale:2}};
       const chartEl=document.getElementById('umapChart');
       if(!umapChart){
-        Plotly.newPlot(chartEl,allTraces=[...edgeTraces,...nodeTraces],layout,config);
+        Plotly.newPlot(chartEl,[...edgeTraces,...nodeTraces],layout,config);
         umapChart=chartEl;
         chartEl.on('plotly_click',data=>{
           const pt=data.points[0];if(!pt||pt.data.mode==='lines')return;
