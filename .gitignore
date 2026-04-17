@@ -9,6 +9,11 @@ venv/
 env/
 ENV/
 
+# Runtime / generated project-level files
+runs.db
+run_history/
+reports.md
+
 # GraphRAG generated files — contents ignored, README preserved for orientation
 output/*
 !output/README.md
