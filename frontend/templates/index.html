@@ -923,7 +923,7 @@
       updateModeMetaChips();
     }
 
-    async function loadRunPromptAudit(promptRunId, mode) {
+    async function loadRunPromptAudit(promptRunId, mode, requestedKey) {
       activeDocumentPromptRun = promptRunId;
       activeDocumentPromptDocumentKey = '';
       documentPromptSummary.innerHTML  = 'Loading…';
@@ -932,7 +932,7 @@
       documentPromptContent.textContent = 'Loading snapshot…';
       try {
         const res = await fetch(
-          `/api/document-prompts?mode=${encodeURIComponent(mode)}&prompt_run_id=${encodeURIComponent(promptRunId)}`
+          `/api/document-prompts?mode=${encodeURIComponent(mode)}&prompt_run_id=${encodeURIComponent(promptRunId)}&key=${encodeURIComponent(requestedKey || '')}`
         );
         const data = await res.json();
         if (!res.ok || data.error) {
@@ -1100,10 +1100,10 @@
     );
     documentPromptSelect.addEventListener('change', () => {
       if (activeDocumentPromptRun && !activeDocumentPromptDocumentKey) {
-        // Run-based prompt view: reload by prompt_run_id
+        // Run-based prompt view: reload by prompt_run_id with selected key
         const rec = allRuns.find(r => r.prompt_run_id === activeDocumentPromptRun || r.run_id === activeDocumentPromptRun);
         const mode = rec ? rec.mode : activeViewMode;
-        loadRunPromptAudit(activeDocumentPromptRun, mode);
+        loadRunPromptAudit(activeDocumentPromptRun, mode, documentPromptSelect.value);
         return;
       }
       if (!activeDocumentPromptDocumentKey) return;
