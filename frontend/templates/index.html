@@ -12,7 +12,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=6" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=7" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
 
@@ -33,23 +33,19 @@
   <!-- ── App Layout ────────────────────────────────────────────── -->
   <div class="app-layout">
 
-    <!-- ── Documents Sidebar ─────────────────────────────────────── -->
+    <!-- ── Runs Sidebar ──────────────────────────────────────────── -->
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-header-top">
-          <span class="sidebar-label">Documents</span>
-          <div class="mode-toggle sidebar-mode-toggle" id="viewModeToggle">
-            {% for mode in available_modes %}
-            <button
-              class="mode-toggle-btn {% if mode.key == default_view_mode %}active{% endif %}"
-              type="button"
-              data-view-mode="{{ mode.key }}"
-              title="{{ mode.label }}"
-            >{{ 'Default' if mode.key == 'baseline' else 'Auto-Tuned' }}</button>
-            {% endfor %}
-          </div>
+          <span class="sidebar-label">Runs</span>
+          <button class="topbar-btn" id="refreshRunsBtn" title="Refresh run list" style="padding:2px 8px;font-size:12px;">↻</button>
         </div>
-        <div class="sidebar-mode-info" id="sidebarModeInfo">Loading dataset…</div>
+        <div class="run-filter-row" id="runFilterRow">
+          <button class="run-filter-btn active" data-filter="all">All</button>
+          <button class="run-filter-btn" data-filter="baseline">Default</button>
+          <button class="run-filter-btn" data-filter="auto_tuned">Auto-Tuned</button>
+        </div>
+        <div class="sidebar-mode-info" id="sidebarModeInfo">Loading runs…</div>
       </div>
 
       <div class="sidebar-docs" id="sidebarDocsList">
@@ -62,8 +58,6 @@
       <div class="sidebar-footer">
         <div class="sidebar-footer-summary" id="sidebarSummary"></div>
         <div class="sidebar-footer-actions">
-          <button class="topbar-btn" id="selectAllDocsBtn" title="Include all documents in explorer view">All</button>
-          <button class="topbar-btn" id="clearDocsBtn" title="Exclude all documents from explorer view">None</button>
           <button class="topbar-btn primary" id="syncNeo4jBtn">Sync Neo4j</button>
         </div>
       </div>
@@ -437,6 +431,11 @@
     const includedDocumentsByMode = {};
     const knownDocumentsByMode    = {};
 
+    // Per-run state
+    let allRuns      = [];
+    let activeRunId  = null;
+    let runFilterMode = 'all';  // 'all' | 'baseline' | 'auto_tuned'
+
     /* ── Tabs ──────────────────────────────────────────────────── */
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -526,9 +525,17 @@
     }
 
     function updateSidebarModeInfo() {
+      const el = document.getElementById('sidebarModeInfo');
+      if (!el) return;
+      if (activeRunId) {
+        const rec = allRuns.find(r => r.run_id === activeRunId);
+        if (rec) {
+          el.textContent = `Viewing: ${rec.original_filename} · ${rec.mode_label || MODE_LABELS[rec.mode]}`;
+          return;
+        }
+      }
       const info = MODE_OPTIONS[activeViewMode];
-      const el   = document.getElementById('sidebarModeInfo');
-      if (!info || !el) return;
+      if (!info) return;
       el.textContent = info.uses_auto_prompts
         ? `Auto-tuned output · ${shortPath(info.output_dir)}`
         : `Baseline output · ${shortPath(info.output_dir)}`;
@@ -793,84 +800,147 @@
       }
     }
 
-    /* ── Sidebar rendering ───────────────────────────────────────── */
-    function renderSidebar() {
-      const included = currentIncludedDocuments();
-      const total    = allDocuments.length;
-      const count    = included.size;
-
-      const summaryEl = document.getElementById('sidebarSummary');
-      if (summaryEl) {
-        summaryEl.textContent = total
-          ? `${count} of ${total} included in view`
-          : '';
+    /* ── Runs sidebar rendering ─────────────────────────────────── */
+    async function loadRuns() {
+      try {
+        const res  = await fetch('/api/runs');
+        const data = await res.json();
+        allRuns = data.runs || [];
+        renderRunsSidebar();
+      } catch (e) {
+        console.error('Failed to load runs', e);
       }
+    }
 
-      if (!total) {
+    function renderRunsSidebar() {
+      const filtered = allRuns.filter(r => runFilterMode === 'all' || r.mode === runFilterMode);
+      const summaryEl = document.getElementById('sidebarSummary');
+      if (summaryEl) summaryEl.textContent = filtered.length ? `${filtered.length} run${filtered.length === 1 ? '' : 's'}` : '';
+
+      document.getElementById('sidebarModeInfo').textContent =
+        filtered.length ? '' : 'No runs yet — upload a PDF to start.';
+
+      if (!filtered.length) {
         sidebarDocsList.innerHTML = `
           <div class="sidebar-empty">
             <span class="big">📄</span>
-            No indexed documents for this dataset yet.<br>
+            No runs yet.<br>
             <small>Upload a PDF to get started.</small>
           </div>`;
         return;
       }
 
-      sidebarDocsList.innerHTML = allDocuments.map(doc => {
-        const isIncluded = included.has(doc.selection_key);
-        const hasSnap    = Boolean(doc.prompt_audit_run_id);
+      // Group by original filename
+      const groups = {};
+      for (const run of filtered) {
+        const key = run.original_filename;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(run);
+      }
 
-        let badgeClass = 'unknown-prompt';
-        let badgeLabel = 'No record';
-        if (hasSnap) {
-          if (doc.prompt_audit_auto_tune_on_upload) {
-            badgeClass = 'auto-tuned-prompt';
-            badgeLabel = 'Auto-Tuned';
-          } else {
-            badgeClass = 'default-prompt';
-            badgeLabel = 'Default';
-          }
-        }
+      sidebarDocsList.innerHTML = Object.entries(groups).map(([filename, runs]) => {
+        const cards = runs.map(run => {
+          const isActive  = run.run_id === activeRunId;
+          const modeClass = run.mode === 'baseline' ? 'default-prompt' : 'auto-tuned-prompt';
+          const modeLabel = run.mode === 'baseline' ? 'Default' : 'Auto-Tuned';
+          const statusIcon = run.status === 'done' ? '✅' : run.status === 'error' ? '❌' : run.status === 'running' ? '⏳' : '🕐';
+          const ts = run.created_at ? run.created_at.replace('T', ' ') : '';
+          const opts = run.auto_tune_options || {};
+          const hasTuneOpts = Object.keys(opts).length > 0;
+          const statParts = [];
+          if (run.entity_count)       statParts.push(`${run.entity_count} ents`);
+          if (run.relationship_count) statParts.push(`${run.relationship_count} rels`);
+          if (run.community_count)    statParts.push(`${run.community_count} comm`);
+          if (run.document_count)     statParts.push(`${run.document_count} docs`);
 
-        const statParts = [];
-        if (doc.entity_count) statParts.push(`${doc.entity_count} entities`);
-        if (doc.text_units)   statParts.push(`${doc.text_units} units`);
-        if (doc.characters)   statParts.push(`${(doc.characters / 1000).toFixed(0)}k chars`);
+          const tuneOptsHtml = hasTuneOpts
+            ? `<div class="run-card-opts">${Object.entries(opts).map(([k,v]) =>
+                `<span class="run-opt-chip">${esc(k.replace(/^GRAPHRAG_/,'').replace(/_/g,' '))}: ${esc(v)}</span>`
+              ).join('')}</div>`
+            : '';
 
-        const promptsBtn = hasSnap
-          ? `<button class="sdc-prompts-btn" data-doc-prompt="${esc(doc.selection_key)}">View Indexed Prompts →</button>`
-          : `<div class="sdc-no-snapshot">No prompt snapshot yet — re-upload to record</div>`;
-
+          return `
+            <div class="run-card${isActive ? ' active' : ''}" data-run-id="${esc(run.run_id)}" data-run-status="${esc(run.status)}">
+              <div class="run-card-header">
+                <span class="run-mode-badge ${modeClass}">${modeLabel}</span>
+                <span class="run-status-icon">${statusIcon}</span>
+                <span class="run-ts">${esc(ts)}</span>
+                ${run.status === 'done' ? `<button class="run-delete-btn" data-run-id="${esc(run.run_id)}" title="Delete run">🗑</button>` : ''}
+              </div>
+              ${statParts.length ? `<div class="run-card-stats">${statParts.map(s => `<span class="run-stat">${esc(s)}</span>`).join('')}</div>` : ''}
+              ${run.status === 'error' ? `<div class="run-error-msg">${esc(run.error_message || 'Pipeline failed')}</div>` : ''}
+              ${tuneOptsHtml}
+              ${run.status === 'done' && run.prompt_run_id
+                ? `<button class="run-prompts-btn" data-run-id="${esc(run.run_id)}" data-prompt-run-id="${esc(run.prompt_run_id)}" data-mode="${esc(run.mode)}">View Prompts →</button>`
+                : ''}
+            </div>`;
+        }).join('');
         return `
-          <div class="sidebar-doc-card${isIncluded ? ' included' : ''}">
-            <div class="sdc-check-row">
-              <label class="sdc-check-label" title="Include this document in the explorer view">
-                <input type="checkbox" class="sdc-check" data-doc-key="${esc(doc.selection_key)}" ${isIncluded ? 'checked' : ''} />
-                <span class="sdc-title">${esc(doc.title || 'Untitled document')}</span>
-              </label>
-              <span class="prompt-mode-badge ${badgeClass}">${esc(badgeLabel)}</span>
-            </div>
-            ${statParts.length ? `<div class="sdc-stats">${statParts.map(s => `<span class="sdc-stat">${esc(s)}</span>`).join('')}</div>` : ''}
-            ${promptsBtn}
+          <div class="run-file-group">
+            <div class="rfg-filename" title="${esc(filename)}">${esc(filename)}</div>
+            ${cards}
           </div>`;
       }).join('');
 
-      sidebarDocsList.querySelectorAll('.sdc-check').forEach(input => {
-        input.addEventListener('change', () => {
-          const next = new Set(currentIncludedDocuments());
-          const key  = input.dataset.docKey;
-          if (input.checked) next.add(key); else next.delete(key);
-          setIncludedDocuments(next);
+      // Wire click events
+      sidebarDocsList.querySelectorAll('.run-card[data-run-status="done"]').forEach(card => {
+        card.addEventListener('click', async e => {
+          if (e.target.closest('.run-prompts-btn') || e.target.closest('.run-delete-btn')) return;
+          await selectRun(card.dataset.runId);
         });
       });
-
-      sidebarDocsList.querySelectorAll('[data-doc-prompt]').forEach(btn => {
-        btn.addEventListener('click', () => loadDocumentPromptAudit(btn.dataset.docPrompt));
+      sidebarDocsList.querySelectorAll('.run-prompts-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          loadRunPromptAudit(btn.dataset.promptRunId, btn.dataset.mode);
+        });
+      });
+      sidebarDocsList.querySelectorAll('.run-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async e => {
+          e.stopPropagation();
+          if (!confirm('Delete this run and its output data?')) return;
+          await fetch(`/api/runs/${encodeURIComponent(btn.dataset.runId)}`, { method: 'DELETE' });
+          if (activeRunId === btn.dataset.runId) {
+            activeRunId = null;
+            allDocuments = []; allEntities = []; allRels = []; allClaims = []; allCommunities = []; allStats = [];
+            renderAll();
+          }
+          await loadRuns();
+        });
       });
     }
 
+    async function selectRun(run_id) {
+      if (activeRunId === run_id) return;
+      activeRunId = run_id;
+      const rec = allRuns.find(r => r.run_id === run_id);
+      if (rec) {
+        activeViewMode = rec.mode;
+        currentModeLabel = rec.mode_label || MODE_LABELS[rec.mode];
+      }
+      renderRunsSidebar();
+      await loadData();
+      updateModeMetaChips();
+    }
+
+    async function loadRunPromptAudit(promptRunId, mode) {
+      activeDocumentPromptRun = promptRunId;
+      activeDocumentPromptDocumentKey = '';
+      documentPromptKeyByRun[promptRunId] = documentPromptKeyByRun[promptRunId] || '';
+      await openDocumentPromptModal('', mode, promptRunId);
+    }
+
+    /* ── Sidebar rendering (legacy shim) ──────────────────────────── */
+    function renderSidebar() { renderRunsSidebar(); }
+
     /* ── Document filter logic ───────────────────────────────────── */
     function syncIncludedDocuments() {
+      // In run-based mode, all documents in the active run are always shown
+      if (activeRunId) {
+        const keys = allDocuments.map(d => d.selection_key);
+        includedDocumentsByMode[activeRunId] = new Set(keys);
+        return;
+      }
       const availableKeys = allDocuments.map(d => d.selection_key);
       const current = includedDocumentsByMode[activeViewMode];
       const known   = knownDocumentsByMode[activeViewMode] || new Set();
@@ -885,10 +955,12 @@
     }
 
     function currentIncludedDocuments() {
+      if (activeRunId) return includedDocumentsByMode[activeRunId] || new Set(allDocuments.map(d => d.selection_key));
       return includedDocumentsByMode[activeViewMode] || new Set();
     }
 
     function isDocumentVisible(docKeys) {
+      if (activeRunId) return true;   // single run = show all
       if (!allDocuments.length) return true;
       const included = currentIncludedDocuments();
       if (!docKeys || !docKeys.length) return included.size === allDocuments.length;
@@ -898,21 +970,27 @@
     function applyDocumentFilters() {
       filterEntities(); filterRelationships(); filterClaims(); filterCommunities();
       if (umapLoaded) renderUmap();
-      renderSidebar();
+      renderRunsSidebar();
       updateModeMetaChips();
     }
 
     function setIncludedDocuments(nextKeys) {
-      includedDocumentsByMode[activeViewMode] = new Set(nextKeys);
+      const stateKey = activeRunId || activeViewMode;
+      includedDocumentsByMode[stateKey] = new Set(nextKeys);
       applyDocumentFilters();
     }
 
-    document.getElementById('selectAllDocsBtn').addEventListener('click', () =>
-      setIncludedDocuments(new Set(allDocuments.map(d => d.selection_key)))
-    );
-    document.getElementById('clearDocsBtn').addEventListener('click', () =>
-      setIncludedDocuments(new Set())
-    );
+    // Run filter buttons
+    document.querySelectorAll('.run-filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        runFilterMode = btn.dataset.filter;
+        document.querySelectorAll('.run-filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        renderRunsSidebar();
+      });
+    });
+
+    document.getElementById('refreshRunsBtn').addEventListener('click', loadRuns);
 
     /* ── Modal open/close ────────────────────────────────────────── */
     openPromptLibraryBtn.addEventListener('click', () => openPromptLibrary(activeViewMode));
@@ -1032,10 +1110,16 @@
     syncNeo4jBtn.addEventListener('click', async () => {
       if (pipeline_running) return;
       pipeline_running    = true;
-      pendingPipelineMode = activeViewMode;
+      const syncMode = activeRunId
+        ? (allRuns.find(r => r.run_id === activeRunId) || {}).mode || activeViewMode
+        : activeViewMode;
+      pendingPipelineMode = syncMode;
       pendingTaskReload   = false;
       setModeControlsDisabled(true);
-      const res  = await fetch(`/api/neo4j/sync?mode=${encodeURIComponent(activeViewMode)}`, { method: 'POST' });
+      const syncUrl = activeRunId
+        ? `/api/neo4j/sync?run_id=${encodeURIComponent(activeRunId)}`
+        : `/api/neo4j/sync?mode=${encodeURIComponent(syncMode)}`;
+      const res  = await fetch(syncUrl, { method: 'POST' });
       const json = await res.json();
       if (json.error) {
         alert(json.error);
@@ -1067,14 +1151,22 @@
         uploadBtn.disabled = !selectedFile;
         setModeControlsDisabled(false);
         updateAutoTunePanel();
-        await setViewMode(data.mode || pendingPipelineMode, { reload: pendingTaskReload });
+        // Auto-select the newly completed run
+        if (data.run_id && pendingTaskReload) {
+          await loadRuns();
+          await selectRun(data.run_id);
+        } else {
+          await setViewMode(data.mode || pendingPipelineMode, { reload: pendingTaskReload });
+          await loadRuns();
+        }
       } else if (data.status === 'error') {
         clearInterval(pollTimer);
         pipeline_running = false;
         uploadBtn.disabled = !selectedFile;
         setModeControlsDisabled(false);
         updateAutoTunePanel();
-        renderSidebar();
+        await loadRuns();
+        renderRunsSidebar();
       }
     }
 
@@ -1110,14 +1202,17 @@
     /* ── Data loading ────────────────────────────────────────────── */
     async function loadData() {
       try {
-        const res  = await fetch(`/api/data?mode=${encodeURIComponent(activeViewMode)}`);
+        const url = activeRunId
+          ? `/api/data?run_id=${encodeURIComponent(activeRunId)}`
+          : `/api/data?mode=${encodeURIComponent(activeViewMode)}`;
+        const res  = await fetch(url);
         const data = await res.json();
         if (data.error) return;
         currentModeLabel = data.mode_label || MODE_LABELS[activeViewMode];
         allDocuments     = data.documents || [];
         allStats         = data.stats || [];
         syncIncludedDocuments();
-        renderSidebar();
+        renderRunsSidebar();
         updateSidebarModeInfo();
         updateModeMetaChips();
         renderEntities(data.entities);
@@ -1302,6 +1397,7 @@
     document.getElementById('commSearch').addEventListener('input', filterCommunities);
 
     /* Auto-load on page open */
+    loadRuns();
     loadData();
 
     /* ── UMAP Visualization ──────────────────────────────────────── */
@@ -1335,7 +1431,10 @@
 
     async function loadUmapData() {
       try {
-        const res=await fetch(`/api/umap?mode=${encodeURIComponent(activeViewMode)}`);
+        const url = activeRunId
+          ? `/api/umap?run_id=${encodeURIComponent(activeRunId)}`
+          : `/api/umap?mode=${encodeURIComponent(activeViewMode)}`;
+        const res=await fetch(url);
         const data=await res.json();
         if(data.error||!data.nodes||!data.nodes.length){
           umapNodes=[];umapEdges=[];setCount('umap',0);

@@ -7,6 +7,7 @@ from neo4j import GraphDatabase
 import subprocess
 import threading
 import shutil
+import sqlite3
 import time
 import math
 import re
@@ -244,9 +245,141 @@ def _request_mode(default=None):
 UPLOAD_FOLDER = os.path.join(PROJECT_ROOT, 'frontend', 'uploads')
 INPUT_FOLDER  = os.path.join(PROJECT_ROOT, 'input')
 PROMPT_AUDIT_ROOT = os.path.join(PROJECT_ROOT, 'prompt_history')
+RUNS_DB_PATH = os.path.join(PROJECT_ROOT, 'runs.db')
+RUNS_OUTPUT_BASE = os.path.join(PROJECT_ROOT, 'output', 'runs')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(INPUT_FOLDER,  exist_ok=True)
 os.makedirs(PROMPT_AUDIT_ROOT, exist_ok=True)
+os.makedirs(RUNS_OUTPUT_BASE, exist_ok=True)
+
+
+# ── Runs SQLite database ───────────────────────────────────────────────────────
+def _init_runs_db():
+    with sqlite3.connect(RUNS_DB_PATH) as db:
+        db.execute('''
+            CREATE TABLE IF NOT EXISTS runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT UNIQUE NOT NULL,
+                original_filename TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                output_dir TEXT NOT NULL,
+                config_path TEXT,
+                auto_tune_options TEXT,
+                pipeline_path TEXT,
+                entity_count INTEGER DEFAULT 0,
+                relationship_count INTEGER DEFAULT 0,
+                community_count INTEGER DEFAULT 0,
+                claim_count INTEGER DEFAULT 0,
+                document_count INTEGER DEFAULT 0,
+                error_message TEXT,
+                prompt_run_id TEXT
+            )
+        ''')
+
+_init_runs_db()
+
+
+def _create_run_record(run_id, filename, mode, output_dir, auto_tune_options,
+                       pipeline_path, config_path, status='pending', created_at=None,
+                       entity_count=0, relationship_count=0, community_count=0,
+                       claim_count=0, document_count=0):
+    ts = created_at or time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+    with sqlite3.connect(RUNS_DB_PATH) as db:
+        db.execute(
+            '''INSERT OR IGNORE INTO runs
+               (run_id, original_filename, mode, status, created_at, output_dir,
+                config_path, auto_tune_options, pipeline_path,
+                entity_count, relationship_count, community_count,
+                claim_count, document_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (run_id, filename, mode, status, ts, output_dir,
+             config_path, _json.dumps(auto_tune_options or {}), pipeline_path,
+             entity_count, relationship_count, community_count,
+             claim_count, document_count),
+        )
+
+
+def _update_run_status(run_id, status, *, entity_count=None, relationship_count=None,
+                       community_count=None, claim_count=None, document_count=None,
+                       error_message=None, prompt_run_id=None):
+    fields = ['status = ?']
+    values = [status]
+    if status in ('done', 'error'):
+        fields.append('completed_at = ?')
+        values.append(time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+    for col, val in [
+        ('entity_count', entity_count),
+        ('relationship_count', relationship_count),
+        ('community_count', community_count),
+        ('claim_count', claim_count),
+        ('document_count', document_count),
+        ('error_message', error_message),
+        ('prompt_run_id', prompt_run_id),
+    ]:
+        if val is not None:
+            fields.append(f'{col} = ?')
+            values.append(val)
+    values.append(run_id)
+    with sqlite3.connect(RUNS_DB_PATH) as db:
+        db.execute(f'UPDATE runs SET {", ".join(fields)} WHERE run_id = ?', values)
+
+
+def _get_run_record(run_id):
+    with sqlite3.connect(RUNS_DB_PATH) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute('SELECT * FROM runs WHERE run_id = ?', (run_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def _get_all_run_records():
+    with sqlite3.connect(RUNS_DB_PATH) as db:
+        db.row_factory = sqlite3.Row
+        rows = db.execute('SELECT * FROM runs ORDER BY created_at DESC').fetchall()
+        return [dict(row) for row in rows]
+
+
+def _import_legacy_runs():
+    """Create synthetic run records in SQLite for pre-existing output/ and output_auto/ data."""
+    for mode in MODE_CONFIG_REQUESTS:
+        mode_state = PIPELINE_MODES[mode]
+        output_dir = mode_state['output_dir']
+        docs_path = os.path.join(output_dir, 'documents.parquet')
+        if not os.path.exists(docs_path):
+            continue
+        legacy_run_id = f'legacy_{mode}'
+        if _get_run_record(legacy_run_id):
+            continue
+        try:
+            import pandas as _pd
+            ents = len(_pd.read_parquet(os.path.join(output_dir, 'entities.parquet'))) if os.path.exists(os.path.join(output_dir, 'entities.parquet')) else 0
+            rels = len(_pd.read_parquet(os.path.join(output_dir, 'relationships.parquet'))) if os.path.exists(os.path.join(output_dir, 'relationships.parquet')) else 0
+            comms = len(_pd.read_parquet(os.path.join(output_dir, 'community_reports.parquet'))) if os.path.exists(os.path.join(output_dir, 'community_reports.parquet')) else 0
+            covs = len(_pd.read_parquet(os.path.join(output_dir, 'covariates.parquet'))) if os.path.exists(os.path.join(output_dir, 'covariates.parquet')) else 0
+            docs_df = _pd.read_parquet(docs_path)
+            doc_count = len(docs_df)
+            mtime = os.path.getmtime(docs_path)
+            created_at = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))
+            _create_run_record(
+                run_id=legacy_run_id,
+                filename=f'(legacy {MODE_LABELS.get(mode, mode)} data)',
+                mode=mode,
+                output_dir=output_dir,
+                auto_tune_options={},
+                pipeline_path=mode_state['pipeline_path'],
+                config_path=os.path.relpath(mode_state['config_path'], PROJECT_ROOT),
+                status='done',
+                created_at=created_at,
+                entity_count=ents,
+                relationship_count=rels,
+                community_count=comms,
+                claim_count=covs,
+                document_count=doc_count,
+            )
+        except Exception:
+            pass
 
 def _resolve_python_bin():
     """Prefer the project venv, but fall back to the current interpreter."""
@@ -273,10 +406,12 @@ def get_driver():
     return GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
 # ── Parquet helpers ───────────────────────────────────────────────────────────
-def _parquet(filename, mode=None):
-    """Read a parquet from the selected output directory; return empty DataFrame if missing."""
-    output_folder = _mode_state(mode)['output_dir']
-    path = os.path.join(output_folder, filename)
+def _parquet(filename, mode=None, output_dir=None):
+    """Read a parquet from the given output directory or selected output directory."""
+    if output_dir:
+        path = os.path.join(output_dir, filename)
+    else:
+        path = os.path.join(_mode_state(mode)['output_dir'], filename)
     try:
         return pd.read_parquet(path)
     except (FileNotFoundError, OSError):
@@ -450,20 +585,22 @@ def _prompt_entries_for_mode(mode, *, categories=None):
     return entries
 
 
-def _record_prompt_audit(mode, document_title, uploaded_filename, auto_tune_options=None):
+def _record_prompt_audit(mode, document_title, uploaded_filename,
+                         auto_tune_options=None, run_id=None, output_dir=None):
     mode_state = _mode_state(mode)
     doc_key = _selection_key(document_title, document_title)
-    run_id = (
-        time.strftime('%Y%m%dT%H%M%S', time.localtime())
-        + '_'
-        + _normalize_mode(mode)
-        + '_'
-        + uuid.uuid4().hex[:8]
-    )
+    if not run_id:
+        run_id = (
+            time.strftime('%Y%m%dT%H%M%S', time.localtime())
+            + '_'
+            + _normalize_mode(mode)
+            + '_'
+            + uuid.uuid4().hex[:8]
+        )
     run_dir = os.path.join(_prompt_audit_mode_dir(mode), run_id)
     os.makedirs(run_dir, exist_ok=True)
 
-    indexed_documents = _documents_from_frame(_parquet('documents.parquet', mode))
+    indexed_documents = _documents_from_frame(_parquet('documents.parquet', mode, output_dir=output_dir))
     prompt_entries = _prompt_entries_for_mode(
         mode,
         categories={INDEXING_PROMPT_CATEGORY},
@@ -728,6 +865,7 @@ pipeline_state = {
     "error":  None,
     "mode":   DEFAULT_VIEW_MODE,
     "mode_label": MODE_LABELS[DEFAULT_VIEW_MODE],
+    "run_id": None,
 }
 pipeline_lock = threading.Lock()
 
@@ -763,7 +901,7 @@ def _validate_mode_config(mode, *, allow_missing_tuned_prompts=False):
     validate_runtime_settings(graphrag_config)
 
 
-def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
+def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None, run_id=None):
     """Background thread: extract → prompt tune (optional) → graphrag index.
 
     A per-upload staged runtime config is created with ``input.file_pattern``
@@ -772,10 +910,12 @@ def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
     """
     mode_state = _mode_state(mode)
     graphrag_config = mode_state['config_path']
-    output_folder = mode_state['output_dir']
-    vector_store_dir = mode_state['vector_store_dir']
     auto_tune_on_upload = mode_state['auto_tune_on_upload']
     mode_label = mode_state['label']
+
+    # Per-run isolated output directory
+    per_run_output_dir = os.path.join(RUNS_OUTPUT_BASE, run_id) if run_id else mode_state['output_dir']
+    os.makedirs(per_run_output_dir, exist_ok=True)
 
     with pipeline_lock:
         pipeline_state["status"] = "running"
@@ -784,6 +924,10 @@ def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
         pipeline_state["error"]  = None
         pipeline_state["mode"]   = mode
         pipeline_state["mode_label"] = mode_label
+        pipeline_state["run_id"] = run_id
+
+    if run_id:
+        _update_run_status(run_id, 'running')
 
     try:
         _log(f"Selected upload mode → {mode_label}")
@@ -792,6 +936,7 @@ def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
             "Automatic prompt tuning on upload → "
             + ("enabled" if auto_tune_on_upload else "disabled")
         )
+        _log(f"Per-run output directory → {os.path.relpath(per_run_output_dir, PROJECT_ROOT)}")
 
         # 1 ─ Extract PDF text ─────────────────────────────────────────────────
         _set_stage("Extracting PDF text")
@@ -822,14 +967,14 @@ def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
 
         per_file_runtime_info = stage_runtime_config(
             MODE_CONFIG_REQUESTS[mode],
-            output_override=OUTPUT_OVERRIDE if mode == DEFAULT_VIEW_MODE else None,
+            output_override=per_run_output_dir,
             cache_override=CACHE_OVERRIDE  if mode == DEFAULT_VIEW_MODE else None,
             file_pattern=single_file_pattern,
             runtime_suffix=safe_stem,
         )
         runtime_root = per_file_runtime_info.runtime_root
         _log(f"Using GraphRAG runtime root → {os.path.relpath(runtime_root, PROJECT_ROOT)}")
-        _log(f"Using GraphRAG output → {os.path.relpath(output_folder, PROJECT_ROOT)}")
+        _log(f"Using GraphRAG output → {os.path.relpath(per_run_output_dir, PROJECT_ROOT)}")
 
         # 2 ─ Auto prompt tuning (tuned config only) ───────────────────────────
         if auto_tune_on_upload:
@@ -861,17 +1006,8 @@ def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
 
         # 3 ─ Reset the vector store output ───────────────────────────────────
         _set_stage("Resetting vector store")
-        if os.path.isdir(vector_store_dir):
-            shutil.rmtree(vector_store_dir)
-            _log(
-                "Removed existing vector store → "
-                + os.path.relpath(vector_store_dir, PROJECT_ROOT)
-            )
-        else:
-            _log(
-                "Vector store will be created → "
-                + os.path.relpath(vector_store_dir, PROJECT_ROOT)
-            )
+        # Per-run vector store is inside the per-run output dir — nothing to pre-clean.
+        _log("Per-run isolated output dir used; no shared vector store to clear.")
 
         # 4 ─ GraphRAG Incremental ─────────────────────────────────────────────
         _set_stage("Keeping cache for incremental indexing")
@@ -884,19 +1020,44 @@ def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
         if not ok:
             raise RuntimeError("graphrag index failed – check the log above.")
 
+        prompt_run_id = None
         try:
             prompt_audit = _record_prompt_audit(
                 mode,
                 f"{stem}.txt",
                 os.path.basename(pdf_path),
                 auto_tune_options=auto_tune_options,
+                run_id=run_id,
+                output_dir=per_run_output_dir,
             )
+            prompt_run_id = prompt_audit['run_id']
             _log(
                 "Prompt snapshot recorded → "
                 + prompt_audit["manifest_path"]
             )
         except Exception as audit_exc:
             _log(f"⚠ Prompt snapshot could not be recorded: {audit_exc}")
+
+        # Update run record with counts from the isolated output dir
+        if run_id:
+            try:
+                ents = len(_parquet('entities.parquet', output_dir=per_run_output_dir))
+                rels = len(_parquet('relationships.parquet', output_dir=per_run_output_dir))
+                comms = len(_parquet('community_reports.parquet', output_dir=per_run_output_dir))
+                covs = len(_parquet('covariates.parquet', output_dir=per_run_output_dir))
+                docs = len(_parquet('documents.parquet', output_dir=per_run_output_dir))
+                _update_run_status(
+                    run_id, 'done',
+                    entity_count=ents,
+                    relationship_count=rels,
+                    community_count=comms,
+                    claim_count=covs,
+                    document_count=docs,
+                    prompt_run_id=prompt_run_id,
+                )
+            except Exception as count_exc:
+                _log(f"⚠ Could not update run counts: {count_exc}")
+                _update_run_status(run_id, 'done', prompt_run_id=prompt_run_id)
 
         with pipeline_lock:
             pipeline_state["status"] = "done"
@@ -910,12 +1071,15 @@ def run_full_pipeline(pdf_path, stem, mode, auto_tune_options=None):
             pipeline_state["stage"]  = "Error"
             pipeline_state["error"]  = str(exc)
         _log(f"❌ Pipeline error: {exc}")
+        if run_id:
+            _update_run_status(run_id, 'error', error_message=str(exc))
 
 
-def run_neo4j_sync(mode):
+def run_neo4j_sync(mode, output_folder=None):
     """Background thread: import the selected GraphRAG output into Neo4j."""
     mode_state = _mode_state(mode)
-    output_folder = mode_state['output_dir']
+    if not output_folder:
+        output_folder = mode_state['output_dir']
     mode_label = mode_state['label']
 
     with pipeline_lock:
@@ -957,6 +1121,18 @@ def run_neo4j_sync(mode):
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+_legacy_imported = False
+
+@app.before_request
+def _ensure_legacy_imported():
+    global _legacy_imported
+    if not _legacy_imported:
+        _legacy_imported = True
+        try:
+            _import_legacy_runs()
+        except Exception:
+            pass
+
 @app.route('/')
 def index():
     return render_template(
@@ -995,13 +1171,32 @@ def upload():
     file.save(save_path)
     auto_tune_options = _parse_auto_tune_options(request.form)
 
+    run_id = (
+        time.strftime('%Y%m%dT%H%M%S', time.localtime())
+        + '_'
+        + _normalize_mode(mode)
+        + '_'
+        + uuid.uuid4().hex[:8]
+    )
+    per_run_output_dir = os.path.join(RUNS_OUTPUT_BASE, run_id)
+    _create_run_record(
+        run_id=run_id,
+        filename=filename,
+        mode=mode,
+        output_dir=per_run_output_dir,
+        auto_tune_options=auto_tune_options,
+        pipeline_path=mode_state['pipeline_path'],
+        config_path=os.path.relpath(mode_state['config_path'], PROJECT_ROOT),
+        status='pending',
+    )
+
     t = threading.Thread(
         target=run_full_pipeline,
-        args=(save_path, stem, mode, auto_tune_options),
+        args=(save_path, stem, mode, auto_tune_options, run_id),
         daemon=True,
     )
     t.start()
-    return jsonify({"ok": True, "filename": filename, "mode": mode})
+    return jsonify({"ok": True, "filename": filename, "mode": mode, "run_id": run_id})
 
 @app.route('/api/status')
 def api_status():
@@ -1013,24 +1208,66 @@ def api_status():
             "error":  pipeline_state["error"],
             "mode":   pipeline_state["mode"],
             "mode_label": pipeline_state["mode_label"],
+            "run_id": pipeline_state.get("run_id"),
         })
+
+
+@app.route('/api/runs')
+def api_runs():
+    """Return all indexing runs from the database."""
+    runs = _get_all_run_records()
+    for r in runs:
+        if r.get('auto_tune_options') and isinstance(r['auto_tune_options'], str):
+            try:
+                r['auto_tune_options'] = _json.loads(r['auto_tune_options'])
+            except Exception:
+                r['auto_tune_options'] = {}
+        r['mode_label'] = MODE_LABELS.get(r['mode'], r['mode'])
+    return jsonify({'runs': runs})
+
+
+@app.route('/api/runs/<run_id>', methods=['DELETE'])
+def api_delete_run(run_id):
+    """Delete a run record and its output directory."""
+    rec = _get_run_record(run_id)
+    if not rec:
+        return jsonify({'error': 'Run not found'}), 404
+    out = rec.get('output_dir', '')
+    if out and os.path.isdir(out) and RUNS_OUTPUT_BASE in out:
+        shutil.rmtree(out, ignore_errors=True)
+    with sqlite3.connect(RUNS_DB_PATH) as db:
+        db.execute('DELETE FROM runs WHERE run_id = ?', (run_id,))
+    return jsonify({'ok': True})
+
 
 @app.route('/api/data')
 def api_data():
     """Return all graph data read directly from parquet pipeline output."""
-    mode = _request_mode()
-    docs_df  = _parquet('documents.parquet', mode)
-    ents_df  = _parquet('entities.parquet', mode)
-    rels_df  = _parquet('relationships.parquet', mode)
-    comms_df = _parquet('communities.parquet', mode)
-    crs_df   = _parquet('community_reports.parquet', mode)
-    tu_df    = _parquet('text_units.parquet', mode)
-    cov_df   = _parquet('covariates.parquet', mode)
+    run_id = request.args.get('run_id')
+    output_dir = None
+    if run_id:
+        rec = _get_run_record(run_id)
+        if rec:
+            output_dir = rec['output_dir']
+            mode = rec['mode']
+        else:
+            return jsonify({'error': f'Run {run_id} not found'}), 404
+    else:
+        mode = _request_mode()
+
+    docs_df  = _parquet('documents.parquet', mode, output_dir=output_dir)
+    ents_df  = _parquet('entities.parquet', mode, output_dir=output_dir)
+    rels_df  = _parquet('relationships.parquet', mode, output_dir=output_dir)
+    comms_df = _parquet('communities.parquet', mode, output_dir=output_dir)
+    crs_df   = _parquet('community_reports.parquet', mode, output_dir=output_dir)
+    tu_df    = _parquet('text_units.parquet', mode, output_dir=output_dir)
+    cov_df   = _parquet('covariates.parquet', mode, output_dir=output_dir)
 
     if docs_df.empty and ents_df.empty:
         return jsonify({'documents': [], 'entities': [], 'claims': [],
                         'communities': [], 'relationships': [], 'stats': [],
-                        'mode': mode, 'mode_label': _mode_state(mode)['label']})
+                        'mode': mode, 'mode_label': _mode_state(mode)['label'],
+                        'run_id': run_id})
 
     prompt_audit_index = _load_prompt_audit_index(mode)
     doc_meta_by_id = {}
@@ -1215,6 +1452,7 @@ def api_data():
         'stats':         stats,
         'mode':          mode,
         'mode_label':    _mode_state(mode)['label'],
+        'run_id':        run_id,
     })
 
 
@@ -1357,19 +1595,28 @@ def api_document_prompts():
 
 @app.route('/api/neo4j/sync', methods=['POST'])
 def api_neo4j_sync():
-    mode = _request_mode()
-    mode_state = _mode_state(mode)
+    run_id = request.args.get('run_id')
+    if run_id:
+        rec = _get_run_record(run_id)
+        if not rec:
+            return jsonify({'error': f'Run {run_id} not found'}), 404
+        mode = rec['mode']
+        output_dir = rec['output_dir']
+    else:
+        mode = _request_mode()
+        output_dir = _mode_state(mode)['output_dir']
+
     if pipeline_state["status"] == "running":
         return jsonify({"error": "Another task is already running. Please wait."}), 409
 
-    documents_path = os.path.join(mode_state['output_dir'], 'documents.parquet')
+    documents_path = os.path.join(output_dir, 'documents.parquet')
     if not os.path.exists(documents_path):
         return jsonify({
-            "error": "No indexed GraphRAG output exists for this mode yet. Run indexing first.",
+            "error": "No indexed GraphRAG output exists for this run yet. Run indexing first.",
             "mode": mode,
         }), 400
 
-    t = threading.Thread(target=run_neo4j_sync, args=(mode,), daemon=True)
+    t = threading.Thread(target=run_neo4j_sync, args=(mode, output_dir), daemon=True)
     t.start()
     return jsonify({"ok": True, "mode": mode})
 
@@ -1435,19 +1682,30 @@ def api_db_info():
 @app.route('/api/umap')
 def api_umap():
     """Return entity layout coordinates from parquet or a derived graph layout."""
-    mode = _request_mode()
-    docs_df  = _parquet('documents.parquet', mode)
-    ents_df  = _parquet('entities.parquet', mode)
-    rels_df  = _parquet('relationships.parquet', mode)
-    comms_df = _parquet('communities.parquet', mode)
-    tu_df    = _parquet('text_units.parquet', mode)
+    run_id = request.args.get('run_id')
+    output_dir = None
+    if run_id:
+        rec = _get_run_record(run_id)
+        if rec:
+            output_dir = rec['output_dir']
+            mode = rec['mode']
+        else:
+            return jsonify({'error': f'Run {run_id} not found', 'nodes': [], 'edges': []}), 404
+    else:
+        mode = _request_mode()
+
+    docs_df  = _parquet('documents.parquet', mode, output_dir=output_dir)
+    ents_df  = _parquet('entities.parquet', mode, output_dir=output_dir)
+    rels_df  = _parquet('relationships.parquet', mode, output_dir=output_dir)
+    comms_df = _parquet('communities.parquet', mode, output_dir=output_dir)
+    tu_df    = _parquet('text_units.parquet', mode, output_dir=output_dir)
 
     if ents_df.empty:
         return jsonify({'error': 'No pipeline output found', 'nodes': [], 'edges': []}), 404
 
     # ── Community membership: entity_id × level → (comm_num, ai_title) ─────────
     # Build AI title lookup from community_reports (same titles as Communities tab).
-    crs_df = _parquet('community_reports.parquet', mode)
+    crs_df = _parquet('community_reports.parquet', mode, output_dir=output_dir)
     comm_to_ai_title = {}
     for _, row in crs_df.iterrows():
         try:
@@ -1554,4 +1812,5 @@ def api_umap():
 
 
 if __name__ == '__main__':
+    _import_legacy_runs()
     app.run(host='0.0.0.0', port=8501, debug=False, use_reloader=False)

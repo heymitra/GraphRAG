@@ -314,6 +314,146 @@ h1, h2, h3 { font-family: var(--font-heading); color: #fff; }
   opacity: 0.7;
 }
 
+/* ── Run filter row ──────────────────────────────────────────────── */
+.run-filter-row {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px 2px;
+}
+.run-filter-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 2px 9px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.run-filter-btn.active,
+.run-filter-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* ── Run file group ──────────────────────────────────────────────── */
+.run-file-group {
+  margin-bottom: 10px;
+}
+.rfg-filename {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+  padding: 6px 12px 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Run card ────────────────────────────────────────────────────── */
+.run-card {
+  margin: 0 8px 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.run-card:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.15); }
+.run-card.active { border-color: var(--accent); background: rgba(122,57,255,0.1); }
+.run-card[data-run-status="running"] { cursor: default; opacity: 0.75; }
+.run-card[data-run-status="error"]   { cursor: default; border-color: rgba(255,80,80,0.4); }
+.run-card[data-run-status="pending"] { cursor: default; opacity: 0.6; }
+
+.run-card-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.run-mode-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.run-mode-badge.default-prompt    { background: rgba(80,160,255,0.2); color: #80c8ff; }
+.run-mode-badge.auto-tuned-prompt { background: rgba(255,180,50,0.2); color: #ffd080; }
+.run-status-icon { font-size: 0.75rem; }
+.run-ts {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+.run-delete-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.75rem;
+  opacity: 0.5;
+  padding: 0 2px;
+  transition: opacity 0.15s;
+}
+.run-delete-btn:hover { opacity: 1; }
+
+.run-card-stats {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 3px 0;
+}
+.run-stat {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
+  padding: 1px 7px;
+}
+
+.run-error-msg {
+  font-size: 0.65rem;
+  color: #ff8080;
+  margin: 3px 0;
+  word-break: break-word;
+}
+
+.run-card-opts {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 3px 0;
+}
+.run-opt-chip {
+  font-size: 0.6rem;
+  color: #ffd080;
+  background: rgba(255,180,50,0.1);
+  border-radius: 8px;
+  padding: 1px 6px;
+}
+
+.run-prompts-btn {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+  padding: 4px 8px;
+  background: rgba(122,57,255,0.12);
+  border: 1px solid rgba(122,57,255,0.35);
+  border-radius: 6px;
+  color: var(--accent-light, #b89aff);
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 500;
+  text-align: center;
+  transition: background 0.15s;
+}
+.run-prompts-btn:hover { background: rgba(122,57,255,0.25); }
+
 /* Sidebar footer */
 .sidebar-footer {
   padding: 12px 12px 14px;
