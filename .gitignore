@@ -9,15 +9,23 @@ venv/
 env/
 ENV/
 
-# GraphRAG generated files
-output/
-output_auto/
-cache/
-cache_auto/
-logs/
-logs_auto/
-prompts_auto/
-prompt_history/
+# GraphRAG generated files — contents ignored, README preserved for orientation
+output/*
+!output/README.md
+output_auto/*
+!output_auto/README.md
+cache/*
+!cache/README.md
+cache_auto/*
+!cache_auto/README.md
+logs/*
+!logs/README.md
+logs_auto/*
+!logs_auto/README.md
+prompts_auto/*
+!prompts_auto/README.md
+prompt_history/*
+!prompt_history/README.md
 .graphrag-runtime/
 
 # Data files
@@ -25,10 +33,10 @@ prompt_history/
 *.csv
 *.txt
 *.pdf
-input/
-!input/.gitkeep
-frontend/uploads/
-!frontend/uploads/.gitkeep
+input/*
+!input/README.md
+frontend/uploads/*
+!frontend/uploads/README.md
 !prompts/*.txt
 !requirements.txt
 !README.txt
