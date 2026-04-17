@@ -1512,6 +1512,48 @@ def api_document_prompts():
     mode = _request_mode()
     document_key = (request.args.get('document_key') or '').strip()
     requested_key = (request.args.get('key') or '').strip()
+    prompt_run_id = (request.args.get('prompt_run_id') or '').strip()
+
+    # Direct lookup by prompt_run_id — no document_key needed
+    if prompt_run_id:
+        manifest = _load_prompt_audit_manifest(mode, prompt_run_id)
+        if not manifest:
+            return jsonify({
+                'error': f'Prompt snapshot {prompt_run_id} not found.',
+                'mode': mode,
+            }), 404
+        entries = [e for e in manifest.get('prompts', []) if e.get('category') == INDEXING_PROMPT_CATEGORY]
+        if not entries:
+            entries = manifest.get('prompts', [])
+        selected = next((e for e in entries if e.get('key') == requested_key), None)
+        if selected is None and entries:
+            selected = entries[0]
+        content = ''
+        if selected and selected.get('snapshot_path'):
+            p = resolve_project_path(selected['snapshot_path'], project_root=PROJECT_ROOT)
+            if os.path.exists(p):
+                with open(p, 'r', encoding='utf-8') as fh:
+                    content = fh.read()
+        synthetic_doc = {
+            'id': '',
+            'title': manifest.get('uploaded_filename') or manifest.get('document_title') or prompt_run_id,
+            'selection_key': prompt_run_id,
+        }
+        record = {k: manifest.get(k) for k in (
+            'run_id', 'recorded_at', 'pipeline_path', 'manifest_path',
+            'uploaded_filename', 'document_count', 'auto_tune_on_upload',
+            'auto_tune_options', 'mode_label',
+        )}
+        record['matched_via'] = 'prompt_run_id'
+        return jsonify({
+            'mode': mode,
+            'mode_label': _mode_state(mode)['label'],
+            'document': synthetic_doc,
+            'record': record,
+            'entries': entries,
+            'selected': ({**selected, 'content': content} if selected else None),
+        })
+
     if not document_key:
         return jsonify({'error': 'Missing document_key.', 'mode': mode}), 400
 

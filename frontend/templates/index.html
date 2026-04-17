@@ -926,8 +926,69 @@
     async function loadRunPromptAudit(promptRunId, mode) {
       activeDocumentPromptRun = promptRunId;
       activeDocumentPromptDocumentKey = '';
-      documentPromptKeyByRun[promptRunId] = documentPromptKeyByRun[promptRunId] || '';
-      await openDocumentPromptModal('', mode, promptRunId);
+      documentPromptSummary.innerHTML  = 'Loading…';
+      documentPromptMeta.textContent   = '';
+      documentPromptFileMeta.textContent = '';
+      documentPromptContent.textContent = 'Loading snapshot…';
+      try {
+        const res = await fetch(
+          `/api/document-prompts?mode=${encodeURIComponent(mode)}&prompt_run_id=${encodeURIComponent(promptRunId)}`
+        );
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          documentPromptSummary.innerHTML = esc(data.error || 'No prompt snapshot found.');
+          documentPromptMeta.textContent = '';
+          documentPromptSelect.innerHTML = '';
+          documentPromptContent.textContent = '';
+          documentPromptModal.classList.add('open');
+          return;
+        }
+        const record  = data.record  || {};
+        const entries = data.entries || [];
+        const selected = data.selected || null;
+        const documentInfo = data.document || {};
+        if (selected) documentPromptKeyByRun[promptRunId] = selected.key;
+
+        const isAutoTuned = Boolean(record.auto_tune_on_upload);
+        const badgeClass  = isAutoTuned ? 'auto-tuned-prompt' : 'default-prompt';
+        const badgeLabel  = isAutoTuned ? 'Auto-Tuned' : 'Default';
+
+        documentPromptSummary.innerHTML =
+          `${esc(documentInfo.title || promptRunId)} &nbsp;<span class="prompt-mode-badge ${badgeClass}">${esc(badgeLabel)}</span>`;
+        document.getElementById('documentPromptSubtitle').textContent =
+          `Recorded ${record.recorded_at || 'unknown'} · Pipeline: ${record.pipeline_path || 'unavailable'}`;
+        const runMeta = [];
+        if (record.manifest_path) runMeta.push(record.manifest_path);
+        if (record.uploaded_filename) runMeta.push(`Upload: ${record.uploaded_filename}`);
+        if (record.document_count) runMeta.push(`${record.document_count} docs in run`);
+        documentPromptMeta.textContent =
+          [`${entries.length} indexing prompt snapshots`, ...runMeta, formatAutoTuneOptions(record.auto_tune_options)]
+            .filter(Boolean).join(' · ');
+
+        documentPromptSelect.innerHTML = entries.map(e =>
+          `<option value="${esc(e.key)}">${esc(e.category)} · ${esc(e.label)}</option>`
+        ).join('');
+
+        if (!selected) {
+          documentPromptFileMeta.textContent = '';
+          documentPromptContent.textContent  = 'No prompt snapshots recorded for this run.';
+          documentPromptModal.classList.add('open');
+          return;
+        }
+        documentPromptSelect.value = selected.key;
+        documentPromptFileMeta.textContent = [
+          selected.snapshot_path ? `Snapshot ${selected.snapshot_path}` : '',
+          selected.path ? `Source ${selected.path}` : '',
+          selected.updated_at ? `Updated ${selected.updated_at}` : '',
+          selected.sha256 ? `SHA256 ${shortHash(selected.sha256)}` : '',
+        ].filter(Boolean).join(' · ');
+        documentPromptContent.textContent = selected.content || 'No content stored for this snapshot.';
+        documentPromptModal.classList.add('open');
+      } catch (err) {
+        documentPromptSummary.textContent = 'Could not load prompt snapshot.';
+        documentPromptMeta.textContent = String(err);
+        documentPromptModal.classList.add('open');
+      }
     }
 
     /* ── Sidebar rendering (legacy shim) ──────────────────────────── */
@@ -1038,6 +1099,13 @@
       loadPromptPreview(activePromptLibraryMode, promptPreviewSelect.value)
     );
     documentPromptSelect.addEventListener('change', () => {
+      if (activeDocumentPromptRun && !activeDocumentPromptDocumentKey) {
+        // Run-based prompt view: reload by prompt_run_id
+        const rec = allRuns.find(r => r.prompt_run_id === activeDocumentPromptRun || r.run_id === activeDocumentPromptRun);
+        const mode = rec ? rec.mode : activeViewMode;
+        loadRunPromptAudit(activeDocumentPromptRun, mode);
+        return;
+      }
       if (!activeDocumentPromptDocumentKey) return;
       loadDocumentPromptAudit(activeDocumentPromptDocumentKey, documentPromptSelect.value);
     });
