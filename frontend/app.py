@@ -1203,14 +1203,17 @@ def upload():
 @app.route('/api/status')
 def api_status():
     with pipeline_lock:
+        full_log = pipeline_state["log"]
+        log_offset = max(0, len(full_log) - 100)
         return jsonify({
-            "status": pipeline_state["status"],
-            "stage":  pipeline_state["stage"],
-            "log":    pipeline_state["log"][-100:],   # last 100 lines
-            "error":  pipeline_state["error"],
-            "mode":   pipeline_state["mode"],
+            "status":     pipeline_state["status"],
+            "stage":      pipeline_state["stage"],
+            "log":        full_log[log_offset:],
+            "log_offset": log_offset,
+            "error":      pipeline_state["error"],
+            "mode":       pipeline_state["mode"],
             "mode_label": pipeline_state["mode_label"],
-            "run_id": pipeline_state.get("run_id"),
+            "run_id":     pipeline_state.get("run_id"),
         })
 
 
@@ -1239,6 +1242,42 @@ def api_delete_run(run_id):
         shutil.rmtree(out, ignore_errors=True)
     with sqlite3.connect(RUNS_DB_PATH) as db:
         db.execute('DELETE FROM runs WHERE run_id = ?', (run_id,))
+    return jsonify({'ok': True})
+
+
+@app.route('/api/runs', methods=['DELETE'])
+def api_delete_all_runs():
+    """Delete all run records and their output directories, then reset pipeline state."""
+    runs = _get_all_run_records()
+    for rec in runs:
+        out = rec.get('output_dir', '')
+        if out and os.path.isdir(out) and RUNS_OUTPUT_BASE in out:
+            shutil.rmtree(out, ignore_errors=True)
+    with sqlite3.connect(RUNS_DB_PATH) as db:
+        db.execute('DELETE FROM runs')
+    with pipeline_lock:
+        pipeline_state['status'] = 'idle'
+        pipeline_state['stage'] = ''
+        pipeline_state['log'] = []
+        pipeline_state['error'] = None
+        pipeline_state['run_id'] = None
+    return jsonify({'ok': True, 'deleted': len(runs)})
+
+
+@app.route('/api/reset-pipeline', methods=['POST'])
+def api_reset_pipeline():
+    """Reset a stuck pipeline state and mark orphaned running/pending runs as error."""
+    with pipeline_lock:
+        pipeline_state['status'] = 'idle'
+        pipeline_state['stage'] = ''
+        pipeline_state['log'] = []
+        pipeline_state['error'] = None
+        pipeline_state['run_id'] = None
+    with sqlite3.connect(RUNS_DB_PATH) as db:
+        db.execute(
+            "UPDATE runs SET status='error', error_message='Cancelled by user reset' "
+            "WHERE status IN ('running', 'pending')"
+        )
     return jsonify({'ok': True})
 
 

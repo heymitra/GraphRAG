@@ -38,7 +38,11 @@
       <div class="sidebar-header">
         <div class="sidebar-header-top">
           <span class="sidebar-label">Runs</span>
-          <button class="topbar-btn" id="refreshRunsBtn" title="Refresh run list" style="padding:2px 8px;font-size:12px;">↻</button>
+          <div style="display:flex;gap:4px;align-items:center;">
+            <button class="topbar-btn" id="refreshRunsBtn" title="Refresh run list" style="padding:2px 8px;font-size:12px;">↻</button>
+            <button class="topbar-btn" id="resetPipelineBtn" title="Reset stuck pipeline state" style="padding:2px 8px;font-size:12px;">⚡ Reset</button>
+            <button class="topbar-btn danger" id="clearAllRunsBtn" title="Delete all runs" style="padding:2px 8px;font-size:12px;">🗑 Clear All</button>
+          </div>
         </div>
         <div class="run-filter-row" id="runFilterRow">
           <button class="run-filter-btn active" data-filter="all">All</button>
@@ -865,7 +869,7 @@
                 <span class="run-mode-badge ${modeClass}">${modeLabel}</span>
                 <span class="run-status-icon">${statusIcon}</span>
                 <span class="run-ts">${esc(ts)}</span>
-                ${run.status === 'done' ? `<button class="run-delete-btn" data-run-id="${esc(run.run_id)}" title="Delete run">🗑</button>` : ''}
+                <button class="run-delete-btn" data-run-id="${esc(run.run_id)}" title="Delete run">🗑</button>
               </div>
               ${statParts.length ? `<div class="run-card-stats">${statParts.map(s => `<span class="run-stat">${esc(s)}</span>`).join('')}</div>` : ''}
               ${run.status === 'error' ? `<div class="run-error-msg">${esc(run.error_message || 'Pipeline failed')}</div>` : ''}
@@ -1052,6 +1056,21 @@
     });
 
     document.getElementById('refreshRunsBtn').addEventListener('click', loadRuns);
+
+    document.getElementById('resetPipelineBtn').addEventListener('click', async () => {
+      if (!confirm('Reset the pipeline state? Any stuck running/pending runs will be marked as error.')) return;
+      await fetch('/api/reset-pipeline', { method: 'POST' });
+      await loadRuns();
+    });
+
+    document.getElementById('clearAllRunsBtn').addEventListener('click', async () => {
+      if (!confirm('Delete ALL runs and their output data? This cannot be undone.')) return;
+      await fetch('/api/runs', { method: 'DELETE' });
+      activeRunId = null;
+      allDocuments = []; allEntities = []; allRels = []; allClaims = []; allCommunities = []; allStats = [];
+      renderAll();
+      await loadRuns();
+    });
 
     /* ── Modal open/close ────────────────────────────────────────── */
     openPromptLibraryBtn.addEventListener('click', () => openPromptLibrary(activeViewMode));
@@ -1253,17 +1272,22 @@
       };
       pill.innerHTML = dot + ' <span id="statusLabel">' + (labelMap[data.status] || data.status) + '</span>';
 
-      if (data.log && data.log.length > lastLogLen) {
-        logPanel.classList.remove('hidden');
-        const newLines = data.log.slice(lastLogLen);
-        lastLogLen = data.log.length;
-        newLines.forEach(line => {
-          const p = document.createElement('p');
-          p.textContent = line;
-          if (line.startsWith('❌') || line.toLowerCase().includes('error')) p.classList.add('error-line');
-          logBox.appendChild(p);
-        });
-        logBox.scrollTop = logBox.scrollHeight;
+      if (data.log) {
+        const offset   = data.log_offset || 0;
+        const totalLen = offset + data.log.length;
+        if (totalLen > lastLogLen) {
+          logPanel.classList.remove('hidden');
+          const startIdx = Math.max(0, lastLogLen - offset);
+          const newLines = data.log.slice(startIdx);
+          lastLogLen = totalLen;
+          newLines.forEach(line => {
+            const p = document.createElement('p');
+            p.textContent = line;
+            if (line.startsWith('❌') || line.toLowerCase().includes('error')) p.classList.add('error-line');
+            logBox.appendChild(p);
+          });
+          requestAnimationFrame(() => { logBox.scrollTop = logBox.scrollHeight; });
+        }
       }
     }
 

@@ -92,6 +92,8 @@ h1, h2, h3 { font-family: var(--font-heading); color: #fff; }
 .topbar-btn:hover { background: var(--surface-hover); border-color: rgba(255,255,255,0.15); }
 .topbar-btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
 .topbar-btn.primary:hover { opacity: .9; }
+.topbar-btn.danger { background: #c0392b; color: #fff; border-color: transparent; }
+.topbar-btn.danger:hover { background: #e74c3c; }
 .topbar-btn:disabled, .modal-close:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── Status pill ──────────────────────────────────────────────── */
