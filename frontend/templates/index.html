@@ -1448,8 +1448,21 @@
       const empty=document.getElementById('commEmpty'); const content=document.getElementById('commContent'); const grid=document.getElementById('commList');
       if(!list.length){if(!allCommunities.length){empty.style.display='';content.style.display='none';return;}empty.style.display='none';content.style.display='block';grid.innerHTML='<div class="empty compact">No communities match the current filter.</div>';return;}
       empty.style.display='none';content.style.display='block';grid.innerHTML='';
+
+      // Build lookup and compute which nums should be shown (matched + their ancestors)
+      const byNum={};
+      allCommunities.forEach(c=>{byNum[c.community_num]=c;});
+      const matchedNums=new Set(list.map(c=>c.community_num));
+      const shownNums=new Set(matchedNums);
       list.forEach(c=>{
-        const card=document.createElement('div');card.className='comm-card';
+        let cur=c;
+        while(cur&&cur.parent_num!==undefined&&cur.parent_num>=0){shownNums.add(cur.parent_num);cur=byNum[cur.parent_num];}
+      });
+
+      const hasSearch=!!document.getElementById('commSearch').value.trim();
+
+      function makeCommCard(c){
+        const card=document.createElement('div');card.className=`comm-card level-${c.level}`;
         const entities=c.entities||[];
         const chips=entities.map(e=>`<span class="entity-chip ${(e.type||'').toLowerCase()}">${esc(e.name)}</span>`).join('');
         const summary=c.summary?`<p class="comm-summary">${esc(c.summary)}</p>`:'';
@@ -1458,8 +1471,25 @@
         const fe=c.findings_count>0?`<div class="comm-findings">📋 ${c.findings_count} findings</div>`:'';
         card.innerHTML=`<div class="comm-header"><span class="comm-number">${esc(c.base_title)}</span><div class="comm-title">${esc(c.report_title||c.base_title)}</div><span class="comm-rank ${rc}" title="Quality rank (0–10)">${rank.toFixed(1)}</span><div class="comm-meta">Level ${c.level??'?'} · ${entities.length} entities</div><div class="comm-arrow">▼</div></div><div class="comm-body">${summary}${fe}<div class="entity-chips">${chips||'<span style="color:var(--text-muted);font-size:.8rem;">No entities</span>'}</div></div>`;
         card.querySelector('.comm-header').addEventListener('click',()=>card.classList.toggle('open'));
-        grid.appendChild(card);
-      });
+        // Render visible children
+        const visChildren=(c.children_nums||[]).map(n=>byNum[n]).filter(ch=>ch&&shownNums.has(ch.community_num));
+        if(visChildren.length>0){
+          const childDiv=document.createElement('div');childDiv.className='comm-children';
+          visChildren.forEach(ch=>childDiv.appendChild(makeCommCard(ch)));
+          card.querySelector('.comm-body').appendChild(childDiv);
+          // Auto-open ancestors when searching so results are visible
+          if(hasSearch&&!matchedNums.has(c.community_num))card.classList.add('open');
+        }
+        return card;
+      }
+
+      // Render from level 0 roots; fall back to flat list if no hierarchy data
+      const level0=allCommunities.filter(c=>c.level===0&&shownNums.has(c.community_num));
+      if(level0.length>0){
+        level0.forEach(c=>grid.appendChild(makeCommCard(c)));
+      } else {
+        list.forEach(c=>grid.appendChild(makeCommCard(c)));
+      }
     }
 
     document.getElementById('commSearch').addEventListener('input', filterCommunities);

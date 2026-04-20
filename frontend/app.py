@@ -1386,14 +1386,20 @@ def api_data():
                        'type': (r.get('type', '') or '').lower()}
         for _, r in ents_df.iterrows()
     }
-    comm_num_to_eids  = {}
-    comm_num_to_title = {}   # structural title from communities.parquet ("Community N")
+    comm_num_to_eids     = {}
+    comm_num_to_title    = {}   # structural title from communities.parquet ("Community N")
+    comm_num_to_parent   = {}
+    comm_num_to_children = {}
     for _, row in comms_df.iterrows():
         num = row.get('community')
         if num is not None:
             n = int(num)
-            comm_num_to_eids[n]  = _to_list(row.get('entity_ids'))
-            comm_num_to_title[n] = row.get('title', '') or f'Community {n}'
+            comm_num_to_eids[n]     = _to_list(row.get('entity_ids'))
+            comm_num_to_title[n]    = row.get('title', '') or f'Community {n}'
+            raw_parent = row.get('parent')
+            comm_num_to_parent[n]   = int(raw_parent) if raw_parent is not None and str(raw_parent) not in ('nan', 'None', '') else -1
+            raw_children = _to_list(row.get('children'))
+            comm_num_to_children[n] = [int(c) for c in raw_children if c is not None]
 
     communities = []
     for _, row in crs_df.iterrows():
@@ -1413,6 +1419,8 @@ def api_data():
             'findings_count': findings_count,
             'summary':        row.get('summary', '') or '',
             'entities':       [ent_lookup[e] for e in eids if e in ent_lookup],
+            'parent_num':     comm_num_to_parent.get(comm_num, -1),
+            'children_nums':  comm_num_to_children.get(comm_num, []),
         })
     communities = sorted(communities, key=lambda c: c['rank'], reverse=True)
 
