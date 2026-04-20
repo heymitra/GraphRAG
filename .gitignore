@@ -8,6 +8,7 @@ graphrag-env/
 venv/
 env/
 ENV/
+**/.venv
 
 # Runtime / generated project-level files
 runs.db

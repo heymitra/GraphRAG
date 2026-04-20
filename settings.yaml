@@ -4,9 +4,10 @@
 completion_models:
   default_completion_model:
     model_provider: openai
-    model: gpt-4o-mini
+    model: nvidia/Qwen3-Next-80B-A3B-Instruct-NVFP4
     auth_method: api_key
     api_key: ${GRAPHRAG_API_KEY}
+    api_base: ${GRAPHRAG_API_BASE}
     retry:
       type: exponential_backoff
       max_retries: 10
@@ -14,9 +15,10 @@ completion_models:
 embedding_models:
   default_embedding_model:
     model_provider: openai
-    model: text-embedding-3-small
+    model: Qwen/Qwen3-Embedding-4B
     auth_method: api_key
     api_key: ${GRAPHRAG_API_KEY}
+    api_base: ${GRAPHRAG_API_BASE}
     retry:
       type: exponential_backoff
       max_retries: 10
